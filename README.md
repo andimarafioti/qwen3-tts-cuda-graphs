@@ -1,32 +1,81 @@
 # Qwen3-TTS CUDA Graphs
 
-Real-time Qwen3-TTS inference using manual CUDA graph capture. No Flash Attention, no vLLM, no Triton. Just PyTorch.
+Real-time Qwen3-TTS inference using manual CUDA graph capture. No Flash Attention, no vLLM, no Triton. Just `torch.cuda.CUDAGraph`. **758 lines of Python.**
 
-## Results (Jetson AGX Orin 64GB)
+## Results
 
-| Model | ms/step | RTF | TTFT | Real-time? |
+Same code, four GPUs. RTF > 1.0 = faster than real-time.
+
+### 0.6B Model
+
+| GPU | ms/step | RTF | TTFA | TDP |
 |---|---|---|---|---|
-| 0.6B | 54ms | 1.55 | 77ms | Yes |
-| 1.7B | 66ms | 1.24 | 77ms | Yes |
+| Baseline (HF streaming) | ~330 | 0.175 | 2,572ms | — |
+| Jetson AGX Orin 64GB | 54 | 1.55 | 77ms | 60W |
+| DGX Spark (GB10) | 55 | 1.52 | 88ms | 100W |
+| RTX 4090 | 16 | 5.06 | 36ms | 450W |
+| H100 80GB HBM3 | 21 | 3.92 | 63ms | 700W |
 
-RTF > 1.0 means faster than real-time. Baseline HF `generate()` RTF: 0.175 (5.7x slower than real-time).
+### 1.7B Model
+
+| GPU | ms/step | RTF | TTFA | TDP |
+|---|---|---|---|---|
+| Baseline (HF streaming) | ~450 | 0.130 | 2,594ms | — |
+| Jetson AGX Orin 64GB | 66 | 1.24 | 77ms | 60W |
+| DGX Spark (GB10) | 62 | 1.35 | 142ms | 100W |
+| RTX 4090 | 19 | 4.46 | 39ms | 450W |
+| H100 80GB HBM3 | 22 | 3.80 | 64ms | 700W |
+
+The RTX 4090 beats the H100 for single-stream TTS latency. For batch=1 workloads, kernel launch overhead matters more than raw memory bandwidth.
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/amarafioti/qwen3-tts-cuda-graphs
+git clone https://github.com/andimarafioti/qwen3-tts-cuda-graphs
 cd qwen3-tts-cuda-graphs
-
-# Install deps + download models
-./setup.sh
-
-# Run benchmark
-./benchmark.sh
+./setup.sh       # creates venv with uv, installs deps, downloads models
+./benchmark.sh   # runs full benchmark, saves JSON + audio samples
 ```
+
+Requires: Python 3.10+, NVIDIA GPU with CUDA, [uv](https://docs.astral.sh/uv/).
+
+### Benchmark a specific model
+
+```bash
+./benchmark.sh 0.6B
+./benchmark.sh 1.7B
+./benchmark.sh both   # default
+```
+
+Results are saved as `bench_results_<GPU_NAME>.json` and audio samples as `sample_0.6B.wav` / `sample_1.7B.wav`.
+
+## How It Works
+
+Qwen3-TTS runs two autoregressive transformers per decode step:
+1. **Talker** (28 layers): generates the first codebook token from text
+2. **Code Predictor** (5 layers): generates 15 additional codebook tokens
+
+A single step involves ~500 small CUDA kernel launches with Python overhead between them. The GPU spends more time waiting for the next kernel than computing.
+
+CUDA graphs capture the entire decode step and replay it as a single GPU operation:
+
+1. **Static KV cache**: pre-allocated fixed-size tensors (no dynamic allocation)
+2. **Manual attention**: direct SDPA + RoPE, bypassing HF's DynamicCache
+3. **Graph capture**: `torch.cuda.CUDAGraph` for both predictor and talker
+4. **Padded attention**: attention mask handles variable-length KV within fixed buffers
+
+### Per-component breakdown (Jetson AGX Orin, 0.6B)
+
+| Component | Before | After |
+|---|---|---|
+| Talker (28 layers) | 75ms | 12ms |
+| Predictor (15 steps) | 190ms | 26ms |
+| Overhead | 65ms | 16ms |
+| **Total per step** | **330ms** | **54ms** |
 
 ## Voice Cloning with Precomputed Speaker Embeddings
 
-For production use, you can extract the speaker embedding once and reuse it across all requests. This skips the speaker encoder and audio tokenizer at inference time, and enables accent-free multilingual synthesis using `x_vector_only` mode.
+For production use, extract the speaker embedding once and reuse it:
 
 ```bash
 # 1. Extract speaker embedding from reference audio (one-time, ~10s)
@@ -38,30 +87,23 @@ python generate_xvec.py --speaker speaker.pt --text "Bonjour!" --language French
 python generate_xvec.py --speaker speaker.pt --text "Hallo!" --language German --output de.wav
 ```
 
-The speaker embedding is a 4KB file (2048-dim bf16 vector). In x_vector_only mode:
-- **No accent bleed**: the model uses its native pronunciation for each language instead of copying the ref audio's accent
-- **Shorter prefill**: 10 tokens vs ~80+ in full ICL clone mode, so TTFT is lower
-- **No ref audio needed at runtime**: just the 4KB embedding file
+The speaker embedding is a 4KB file (2048-dim bf16 vector). In `x_vector_only` mode:
+- **No accent bleed**: native pronunciation per language
+- **Shorter prefill**: 10 tokens vs ~80+ in full ICL clone mode
+- **No ref audio at runtime**: just the 4KB embedding file
 
-## Requirements
+## Comparison with Other Approaches
 
-- Python 3.10+
-- PyTorch 2.1+ with CUDA
-- Any NVIDIA GPU (tested: Jetson AGX Orin, more coming)
+| | nano-qwen3tts-vllm | Qwen3-TTS-streaming | **Ours** |
+|---|---|---|---|
+| Lines of code | 7,289 | ~3,000 | **758** |
+| Flash Attention required | Yes | No | **No** |
+| Triton/torch.compile required | No | Yes | **No** |
+| Runs on Jetson | No | No | **Yes** |
+| RTF on H100 (1.7B) | 0.399 | N/A | **3.80** |
+| TTFA | 160ms (L4) | N/A | **36ms (4090)** |
 
-## How It Works
-
-Qwen3-TTS runs two autoregressive transformers per decode step:
-1. **Talker** (28 layers): generates first codebook token
-2. **Predictor** (5 layers): generates 15 additional codebook tokens
-
-Each step involves ~500 small CUDA kernel launches with Python overhead between them. CUDA graphs capture the entire step and replay it as a single GPU operation, eliminating all launch overhead.
-
-Key techniques:
-- **Static KV cache**: pre-allocated fixed-size tensors (no dynamic allocation during decode)
-- **Manual attention**: direct SDPA + RoPE, bypassing HF's DynamicCache
-- **Graph capture**: `torch.cuda.CUDAGraph` for both predictor and talker decode steps
-- **Padded attention**: talker uses attention mask to handle variable-length KV within fixed buffers
+On the same H100 hardware: **~10x faster with ~10x less code** vs nano-qwen3tts-vllm.
 
 ## Files
 
@@ -71,30 +113,13 @@ manual_cudagraph_talker.py      # Talker graph (341 lines)
 fast_generate_v5.py             # Full generation loop (156 lines)
 extract_speaker.py              # Extract speaker embedding from ref audio
 generate_xvec.py                # End-to-end generation with precomputed speaker
-benchmark.sh                    # Portable benchmark script
-setup.sh                        # Install deps + download models
-bench_v5.py                     # Detailed benchmark (ICL mode)
-bench_ttft.py                   # Time-to-first-token benchmark
+bench_v5.py                     # Benchmark (throughput + TTFA + audio samples)
+bench_ttft.py                   # Detailed TTFA breakdown benchmark
+benchmark.sh                    # Run benchmarks
+setup.sh                        # Setup venv + download models
 ```
 
 Core implementation: **758 lines** of Python.
-
-## Benchmarking on Other GPUs
-
-```bash
-# Benchmark both models
-./benchmark.sh
-
-# Benchmark specific model
-./benchmark.sh 0.6B
-./benchmark.sh 1.7B
-```
-
-Results are saved as `bench_results_<GPU_NAME>.json`. Send them back to compare across hardware!
-
-## Blog Post
-
-See the accompanying blog post: *Real-Time Qwen3-TTS on a Jetson in 758 Lines of PyTorch* (link TBD)
 
 ## License
 
