@@ -1,6 +1,6 @@
 # Qwen3-TTS CUDA Graphs
 
-Real-time Qwen3-TTS inference using manual CUDA graph capture. No Flash Attention, no vLLM, no Triton. Just `torch.cuda.CUDAGraph`. **758 lines of Python.**
+Real-time Qwen3-TTS inference using transformers' `StaticCache` and `torch.cuda.CUDAGraph`. No Flash Attention, no vLLM, no Triton — just the model's own forward pass with the right cache. **449 lines of Python.**
 
 ## Results
 
@@ -57,12 +57,12 @@ Qwen3-TTS runs two autoregressive transformers per decode step:
 
 A single step involves ~500 small CUDA kernel launches with Python overhead between them. The GPU spends more time waiting for the next kernel than computing.
 
-CUDA graphs capture the entire decode step and replay it as a single GPU operation:
+CUDA graphs capture the entire decode step and replay it as a single GPU operation. The key insight: transformers already ships a `StaticCache` class designed for exactly this. It pre-allocates fixed-size KV tensors and uses `index_copy_` for in-place updates — no dynamic allocation, fully compatible with CUDA graph capture.
 
-1. **Static KV cache**: pre-allocated fixed-size tensors (no dynamic allocation)
-2. **Manual attention**: direct SDPA + RoPE, bypassing HF's DynamicCache
-3. **Graph capture**: `torch.cuda.CUDAGraph` for both predictor and talker
-4. **Padded attention**: attention mask handles variable-length KV within fixed buffers
+1. **`StaticCache` from transformers**: pre-allocated fixed-size KV tensors, no custom cache code needed
+2. **Model's own forward pass**: no manual attention reimplementation — the model handles RoPE, masking, and GQA internally
+3. **Graph capture**: `torch.cuda.CUDAGraph` wraps the model's forward for both predictor and talker
+4. **`cache_position` buffer**: updated before each graph replay to shift the causal mask and RoPE
 
 ### Per-component breakdown (Jetson AGX Orin, 0.6B)
 
@@ -96,20 +96,20 @@ The speaker embedding is a 4KB file (2048-dim bf16 vector). In `x_vector_only` m
 
 | | nano-qwen3tts-vllm | Qwen3-TTS-streaming | **Ours** |
 |---|---|---|---|
-| Lines of code | 7,289 | ~3,000 | **758** |
+| Lines of code | 7,289 | ~3,000 | **449** |
 | Flash Attention required | Yes | No | **No** |
 | Triton/torch.compile required | No | Yes | **No** |
 | Runs on Jetson | No | No | **Yes** |
 | RTF on H100 (1.7B) | 0.399 | N/A | **3.80** |
 | TTFA | 160ms (L4) | N/A | **36ms (4090)** |
 
-On the same H100 hardware: **~10x faster with ~10x less code** vs nano-qwen3tts-vllm.
+On the same H100 hardware: **~10x faster with ~16x less code** vs nano-qwen3tts-vllm.
 
 ## Files
 
 ```
-manual_cudagraph_predictor.py   # Predictor graph (261 lines)
-manual_cudagraph_talker.py      # Talker graph (341 lines)
+manual_cudagraph_predictor.py   # Predictor graph with StaticCache (156 lines)
+manual_cudagraph_talker.py      # Talker graph with StaticCache (137 lines)
 fast_generate_v5.py             # Full generation loop (156 lines)
 extract_speaker.py              # Extract speaker embedding from ref audio
 generate_xvec.py                # End-to-end generation with precomputed speaker
@@ -119,7 +119,7 @@ benchmark.sh                    # Run benchmarks
 setup.sh                        # Setup venv + download models
 ```
 
-Core implementation: **758 lines** of Python.
+Core implementation: **449 lines** of Python.
 
 ## License
 
