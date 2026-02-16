@@ -1,3 +1,6 @@
+[tool.setuptools]
+py-modules = []
+
 [project]
 name = "qwen3-tts-cuda-graphs"
 version = "0.1.0"
