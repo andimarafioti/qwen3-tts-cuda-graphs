@@ -49,7 +49,7 @@ print("\nThroughput (3 runs)...", flush=True)
 for i in range(3):
     torch.cuda.synchronize()
     t0 = time.perf_counter()
-    wav, sr = model.generate_voice_clone(text=text, voice_clone_prompt=voice_clone_prompt)
+    wav, sr = model.generate_voice_clone(text=text, voice_clone_prompt=voice_clone_prompt, max_new_tokens=512)
     torch.cuda.synchronize()
     elapsed = time.perf_counter() - t0
     audio_dur = len(wav[0]) / sr
