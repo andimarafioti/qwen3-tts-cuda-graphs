@@ -1,6 +1,6 @@
 # Real-Time Qwen3-TTS: Unlocking 5x Speed on Consumer Hardware
 
-**TL;DR:** Qwen3-TTS is an incredible open-source model, but running it at production speeds on edge hardware requires bypassing the Python overhead. By replacing the standard inference loop with manual CUDA Graphs, we unlocked RTF 5.0 on an RTX 4090 and RTF 1.5 on a Jetson Orin — all in just 758 lines of pure PyTorch.
+**TL;DR:** Qwen3-TTS is an incredible open-source model, but running it at production speeds requires bypassing the Python overhead. By replacing the standard inference loop with manual CUDA Graphs, we unlocked RTF 5.0 on an RTX 4090 and RTF 1.5 on a Jetson Orin — all in just 758 lines of pure PyTorch.
 
 ## The Challenge: The "Reference Code" Gap
 
@@ -42,7 +42,7 @@ RTF > 1.0 = faster than real-time. TTFA = Time to First Audio, measured as time 
 
 **Verified Latency:** On the RTX 4090, we achieved **36ms** latency — well under the 97ms benchmark from the tech report. Even the Jetson Orin hit 77ms, making it viable for real-time edge voice interaction.
 
-**The 4090 Surprise:** For single-user (batch=1) workloads, the RTX 4090 actually outperformed the H100. This highlights that for real-time inference, raw bandwidth (H100) matters less than kernel launch latency (4090).
+**The 4090 Surprise:** For single-user (batch=1) workloads, the RTX 4090 actually outperformed the H100. This suggests that for real-time inference, per-request latency and launch overhead can matter more than peak throughput.
 
 **Edge Efficiency:** The Jetson delivers RTF 1.2–1.5 at 60W while the H100 delivers RTF 3.8–3.9 at 700W. That's ~2.5x more RTF per watt on the edge device, which matters for always-on applications like robotics or embedded assistants.
 
@@ -65,15 +65,6 @@ We didn't rewrite the model in C++ or use a complex serving engine like vLLM. We
 
 This approach demonstrates the power of the PyTorch ecosystem: you don't always need a new engine; sometimes you just need to use the advanced features already available to you.
 
-### What we tried first (and what didn't work)
-
-Before CUDA graphs, we systematically tried everything else:
-
-- **Attention backends** (eager, SDPA, Flash Attention 2): all identical RTF. Attention is not the bottleneck.
-- **Custom CUDA kernels** (fused RMSNorm 8.4x faster, fused SiLU 2.2x): only 1.25x end-to-end. These ops are ~4% of compute.
-- **torch.compile**: we patched three Triton incompatibilities to get it working on Jetson for the first time. Zero speedup — dynamic KV-cache shapes defeat the compiler.
-- **Porting nano-qwen3tts-vllm** (7,289 lines): KV cache block allocator breaks on Jetson's unified memory.
-
 ## Code
 
 We've open-sourced this implementation to help the community deploy Qwen3-TTS in production environments:
@@ -93,6 +84,15 @@ Core implementation:
 - `fast_generate_v5.py` (156 lines)
 
 No Flash Attention. No Triton. No vLLM. Just PyTorch.
+
+### What we tried first (and what didn't work)
+
+Before CUDA graphs, we systematically tried everything else:
+
+- **Attention backends** (eager, SDPA, Flash Attention 2): all identical RTF. Attention is not the bottleneck.
+- **Custom CUDA kernels** (fused RMSNorm 8.4x faster, fused SiLU 2.2x): only 1.25x end-to-end. These ops are ~4% of compute.
+- **torch.compile**: we patched three Triton incompatibilities to get it working on Jetson for the first time. Zero speedup — dynamic KV-cache shapes defeat the compiler.
+- **Porting nano-qwen3tts-vllm** (7,289 lines): KV cache block allocator breaks on Jetson's unified memory.
 
 ## Conclusion
 
