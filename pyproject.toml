@@ -1,0 +1,15 @@
+[project]
+name = "qwen3-tts-cuda-graphs"
+version = "0.1.0"
+description = "Real-time Qwen3-TTS inference using manual CUDA graph capture"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+    "qwen-tts>=0.1.0",
+    "transformers>=4.57",
+    "torch>=2.1",
+    "numpy",
+    "soundfile",
+    "huggingface-hub",
+]

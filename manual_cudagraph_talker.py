@@ -280,7 +280,7 @@ class ManualTalkerGraph:
 
 if __name__ == "__main__":
     import sys, time, numpy as np
-    sys.path.insert(0, '/home/andi/Documents/Qwen3-TTS-streaming')
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from qwen_tts import Qwen3TTSModel
     
     MODEL_PATH = './models/Qwen3-TTS-12Hz-0.6B-Base'
