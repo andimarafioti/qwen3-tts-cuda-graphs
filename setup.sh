@@ -19,6 +19,10 @@ echo "Creating venv and installing dependencies..."
 uv venv .venv --python 3.10
 uv pip install -e . --python .venv/bin/python
 
+# Install flash-attn if possible (optional, speeds up attention on datacenter GPUs)
+echo "Attempting to install flash-attn (optional)..."
+uv pip install flash-attn --python .venv/bin/python 2>/dev/null && echo "  flash-attn installed" || echo "  flash-attn not available (ok, will use manual attention)"
+
 # Verify CUDA
 .venv/bin/python -c "import torch; assert torch.cuda.is_available(), 'CUDA not available'; print(f'PyTorch {torch.__version__}, CUDA {torch.version.cuda}, GPU: {torch.cuda.get_device_name(0)}')" || {
     echo ""
@@ -38,7 +42,10 @@ os.makedirs(models_dir, exist_ok=True)
 
 for model in ['Qwen3-TTS-12Hz-0.6B-Base', 'Qwen3-TTS-12Hz-1.7B-Base']:
     dest = os.path.join(models_dir, model)
-    if os.path.exists(dest):
+    has_weights = os.path.exists(dest) and any(
+        f.endswith(('.safetensors', '.bin')) for f in os.listdir(dest)
+    )
+    if has_weights:
         print(f'  {model}: already downloaded')
     else:
         print(f'  {model}: downloading...')
