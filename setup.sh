@@ -14,14 +14,18 @@ if ! command -v uv &>/dev/null; then
     exit 1
 fi
 
-# Create venv + install deps
-echo "Creating venv and installing dependencies..."
-uv venv .venv --python 3.10
-uv pip install -e . --python .venv/bin/python
+# Create venv + install deps (skip if venv already exists)
+if [ -f "$DIR/.venv/bin/python" ]; then
+    echo "Venv already exists, skipping install. Delete .venv to force reinstall."
+else
+    echo "Creating venv and installing dependencies..."
+    uv venv .venv --python 3.10
+    uv pip install -e . --python .venv/bin/python
 
-# Install flash-attn if possible (optional, speeds up attention on datacenter GPUs)
-echo "Attempting to install flash-attn (optional)..."
-uv pip install flash-attn --python .venv/bin/python 2>/dev/null && echo "  flash-attn installed" || echo "  flash-attn not available (ok, will use manual attention)"
+    # Install flash-attn if possible (optional, speeds up attention on datacenter GPUs)
+    echo "Attempting to install flash-attn (optional)..."
+    uv pip install flash-attn --python .venv/bin/python 2>/dev/null && echo "  flash-attn installed" || echo "  flash-attn not available (ok, will use manual attention)"
+fi
 
 # Verify CUDA
 .venv/bin/python -c "import torch; assert torch.cuda.is_available(), 'CUDA not available'; print(f'PyTorch {torch.__version__}, CUDA {torch.version.cuda}, GPU: {torch.cuda.get_device_name(0)}')" || {
