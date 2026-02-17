@@ -17,13 +17,13 @@ import torch
 from transformers import StaticCache
 
 
-class ManualPredictorGraph:
+class PredictorGraph:
     """
     Captures the full predictor 15-step loop as a CUDA graph,
     using the model's forward with transformers StaticCache.
 
     Usage:
-        mpg = ManualPredictorGraph(code_predictor, pred_config, talker_hidden_size)
+        mpg = PredictorGraph(code_predictor, pred_config, talker_hidden_size)
         mpg.capture()
         codebook_tokens = mpg.run(pred_input)  # pred_input: [1, 2, H]
     """

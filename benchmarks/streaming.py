@@ -7,11 +7,11 @@ import numpy as np
 import soundfile as sf
 from qwen3_tts_cuda_graphs import Qwen3TTSCudaGraphs
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL_SIZE = os.environ.get('MODEL_SIZE', '0.6B')
-MODEL_PATH = os.path.join(SCRIPT_DIR, 'models', f'Qwen3-TTS-12Hz-{MODEL_SIZE}-Base')
+MODEL_PATH = os.path.join(PROJECT_DIR, 'models', f'Qwen3-TTS-12Hz-{MODEL_SIZE}-Base')
 text = "Ladies and gentlemen, I have just been informed that this speech is being generated faster than I can speak it. The robots have officially won. Please remain calm."
-ref_audio = os.path.join(SCRIPT_DIR, 'ref_audio.wav')
+ref_audio = os.path.join(PROJECT_DIR, 'ref_audio.wav')
 ref_text = "I'm confused why some people have super short timelines, yet at the same time are bullish on scaling up reinforcement learning atop LLMs. If we're actually close to a human-like learner, then this whole approach of training on verifiable outcomes."
 
 print("Loading model...")
@@ -132,7 +132,7 @@ for audio_chunk, sr, _ in model.generate_voice_clone_streaming(
 ):
     chunks.append(audio_chunk)
 streaming_audio = np.concatenate(chunks)
-sf.write(os.path.join(SCRIPT_DIR, f'sample_streaming_{MODEL_SIZE}.wav'), streaming_audio, sr)
+sf.write(os.path.join(PROJECT_DIR, f'sample_streaming_{MODEL_SIZE}.wav'), streaming_audio, sr)
 print(f"Saved sample_streaming_{MODEL_SIZE}.wav ({len(streaming_audio)/sr:.1f}s)")
 
 # Non-streaming
@@ -140,7 +140,7 @@ audio_list, sr = model.generate_voice_clone(
     text=text, language="English",
     ref_audio=ref_audio, ref_text=ref_text,
 )
-sf.write(os.path.join(SCRIPT_DIR, f'sample_nonstreaming_{MODEL_SIZE}.wav'), audio_list[0], sr)
+sf.write(os.path.join(PROJECT_DIR, f'sample_nonstreaming_{MODEL_SIZE}.wav'), audio_list[0], sr)
 print(f"Saved sample_nonstreaming_{MODEL_SIZE}.wav ({len(audio_list[0])/sr:.1f}s)")
 
 print("\nDone!")

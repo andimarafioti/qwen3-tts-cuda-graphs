@@ -5,11 +5,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from qwen_tts import Qwen3TTSModel
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL_SIZE = os.environ.get('MODEL_SIZE', '0.6B')
-MODEL_PATH = os.path.join(SCRIPT_DIR, 'models', f'Qwen3-TTS-12Hz-{MODEL_SIZE}-Base')
+MODEL_PATH = os.path.join(PROJECT_DIR, 'models', f'Qwen3-TTS-12Hz-{MODEL_SIZE}-Base')
 text = "Ladies and gentlemen, I have just been informed that this speech is being generated faster than I can speak it. The robots have officially won. Please remain calm."
-ref_audio = os.path.join(SCRIPT_DIR, 'ref_audio.wav')
+ref_audio = os.path.join(PROJECT_DIR, 'ref_audio.wav')
 ref_text = "I'm confused why some people have super short timelines, yet at the same time are bullish on scaling up reinforcement learning atop LLMs."
 
 print(f"=== {MODEL_SIZE} Baseline Benchmark ===")
@@ -50,7 +50,7 @@ for i in range(3):
     torch.cuda.synchronize()
     t0 = time.perf_counter()
     # Cap at 512 tokens (~42s of audio at 12Hz). The vanilla generate_voice_clone
-    # doesn't suppress the top-1024 special token IDs (unlike fast_generate_v5),
+    # doesn't suppress the top-1024 special token IDs (unlike the CUDA graphs version),
     # so the model occasionally samples those and never produces EOS, especially
     # with the 1.7B variant. This cap prevents runaway generation.
     wav, sr = model.generate_voice_clone(text=text, voice_clone_prompt=voice_clone_prompt, max_new_tokens=512)

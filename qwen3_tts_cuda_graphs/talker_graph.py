@@ -17,7 +17,7 @@ import torch
 from transformers import StaticCache
 
 
-class ManualTalkerGraph:
+class TalkerGraph:
     """
     Captures the talker's single-token decode step as a CUDA graph,
     using the model's own forward with transformers StaticCache.

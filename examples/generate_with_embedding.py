@@ -10,11 +10,11 @@ acoustic prompt from reference audio. Benefits:
 
 Usage:
     # First extract the speaker embedding (one-time):
-    python extract_speaker.py --ref_audio voice.wav --output speaker.pt
+    python examples/extract_speaker.py --ref_audio voice.wav --output speaker.pt
 
     # Then generate with CUDA graphs:
-    python generate_xvec.py --speaker speaker.pt --text "Hello world" --language English --output out.wav
-    python generate_xvec.py --speaker speaker.pt --text "Bonjour le monde" --language French --output out.wav
+    python examples/generate_with_embedding.py --speaker speaker.pt --text "Hello world" --language English --output out.wav
+    python examples/generate_with_embedding.py --speaker speaker.pt --text "Bonjour le monde" --language French --output out.wav
 """
 import argparse
 import torch
@@ -51,9 +51,9 @@ def main():
     import soundfile as sf
     from qwen_tts import Qwen3TTSModel
     from transformers import PretrainedConfig
-    from qwen3_tts_cuda_graphs.manual_cudagraph_predictor import ManualPredictorGraph
-    from qwen3_tts_cuda_graphs.manual_cudagraph_talker import ManualTalkerGraph
-    from qwen3_tts_cuda_graphs.fast_generate_v5 import fast_generate_v5
+    from qwen3_tts_cuda_graphs.predictor_graph import PredictorGraph
+    from qwen3_tts_cuda_graphs.talker_graph import TalkerGraph
+    from qwen3_tts_cuda_graphs.generate import fast_generate
 
     print(f"Loading model from {args.model_path}...")
     model = Qwen3TTSModel.from_pretrained(args.model_path, device_map=args.device, dtype=torch.bfloat16)
@@ -91,15 +91,15 @@ def main():
     # Build CUDA graphs
     print("Building CUDA graphs...")
     predictor = talker.code_predictor
-    mpg = ManualPredictorGraph(predictor, pred_config, fc['talker_config']['hidden_size'])
+    mpg = PredictorGraph(predictor, pred_config, fc['talker_config']['hidden_size'])
     mpg.capture(num_warmup=3)
 
-    mtg = ManualTalkerGraph(talker.model, talker_cfg, max_seq_len=args.max_seq)
+    mtg = TalkerGraph(talker.model, talker_cfg, max_seq_len=args.max_seq)
     mtg.capture(prefill_len=prefill_len, num_warmup=3)
 
     # Warmup
     talker.rope_deltas = None
-    fast_generate_v5(
+    fast_generate(
         talker, tie, tam, tth, tpe, config, mpg, mtg,
         temperature=0.9, top_k=50, do_sample=True, max_new_tokens=20,
     )
@@ -108,7 +108,7 @@ def main():
     print("Generating...")
     talker.rope_deltas = None
     t0 = time.time()
-    codec_ids, timing = fast_generate_v5(
+    codec_ids, timing = fast_generate(
         talker, tie, tam, tth, tpe, config, mpg, mtg,
         temperature=0.9, top_k=50, do_sample=True, max_new_tokens=2048,
     )

@@ -3,26 +3,26 @@
 Streaming generation with CUDA graphs for both predictor and talker.
 
 Yields codec ID chunks during generation instead of collecting all at once.
-CUDA graph usage is identical to fast_generate_v5 — same per-step performance.
+CUDA graph usage is identical to non-streaming — same per-step performance.
 """
 import torch
 import torch.nn.functional as F
 import time
 from typing import Generator, Tuple
-from .manual_cudagraph_predictor import ManualPredictorGraph
-from .manual_cudagraph_talker import ManualTalkerGraph
+from .predictor_graph import PredictorGraph
+from .talker_graph import TalkerGraph
 
 
 @torch.inference_mode()
-def fast_generate_v5_streaming(
+def fast_generate_streaming(
     talker,
     talker_input_embeds: torch.Tensor,
     attention_mask: torch.Tensor,
     trailing_text_hiddens: torch.Tensor,
     tts_pad_embed: torch.Tensor,
     config,
-    predictor_graph: ManualPredictorGraph,
-    talker_graph: ManualTalkerGraph,
+    predictor_graph: PredictorGraph,
+    talker_graph: TalkerGraph,
     max_new_tokens: int = 2048,
     temperature: float = 0.9,
     top_k: int = 50,

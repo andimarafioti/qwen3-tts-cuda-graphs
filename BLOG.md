@@ -102,9 +102,9 @@ cd qwen3-tts-cuda-graphs
 ```
 
 Core implementation:
-- `manual_cudagraph_predictor.py` (156 lines)
-- `manual_cudagraph_talker.py` (137 lines)
-- `fast_generate_v5.py` (156 lines) — non-streaming
+- `predictor_graph.py` (156 lines)
+- `talker_graph.py` (137 lines)
+- `generate.py` (156 lines) — non-streaming
 - `streaming.py` (178 lines) — streaming
 - `model.py` (404 lines) — wrapper API
 

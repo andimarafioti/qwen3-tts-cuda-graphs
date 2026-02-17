@@ -29,7 +29,7 @@ echo ""
 run_model() {
     local size=$1
     echo "--- Benchmarking $size ---"
-    MODEL_SIZE="$size" $PY "$DIR/bench_v5.py"
+    MODEL_SIZE="$size" $PY "$DIR/benchmarks/throughput.py"
     echo ""
 }
 

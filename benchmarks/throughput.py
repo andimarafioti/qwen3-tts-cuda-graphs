@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark v5: CUDA graphs using the Qwen3TTSCudaGraphs wrapper."""
+"""Benchmark throughput: CUDA graphs using the Qwen3TTSCudaGraphs wrapper."""
 import torch
 import time
 import os
@@ -7,11 +7,11 @@ import numpy as np
 import soundfile as sf
 from qwen3_tts_cuda_graphs import Qwen3TTSCudaGraphs
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL_SIZE = os.environ.get('MODEL_SIZE', '0.6B')
-MODEL_PATH = os.path.join(SCRIPT_DIR, 'models', f'Qwen3-TTS-12Hz-{MODEL_SIZE}-Base')
+MODEL_PATH = os.path.join(PROJECT_DIR, 'models', f'Qwen3-TTS-12Hz-{MODEL_SIZE}-Base')
 text = "Ladies and gentlemen, I have just been informed that this speech is being generated faster than I can speak it. The robots have officially won. Please remain calm."
-ref_audio = os.path.join(SCRIPT_DIR, 'ref_audio.wav')
+ref_audio = os.path.join(PROJECT_DIR, 'ref_audio.wav')
 ref_text = "I'm confused why some people have super short timelines, yet at the same time are bullish on scaling up reinforcement learning atop LLMs. If we're actually close to a human-like learner, then this whole approach of training on verifiable outcomes."
 
 print("Loading model...")
@@ -101,7 +101,7 @@ if results:
     
     # Save audio from last run
     try:
-        out_wav = os.path.join(SCRIPT_DIR, f'sample_{MODEL_SIZE}.wav')
+        out_wav = os.path.join(PROJECT_DIR, f'sample_{MODEL_SIZE}.wav')
         sf.write(out_wav, audio, sr)
         print(f"\nSaved sample audio to {out_wav}")
     except Exception as e:

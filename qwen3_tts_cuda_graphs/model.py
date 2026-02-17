@@ -1,5 +1,5 @@
 """
-Qwen3TTSCudaGraphs: Real-time TTS using manual CUDA graph capture
+Qwen3TTSCudaGraphs: Real-time TTS using CUDA graph capture.
 
 Wrapper class that provides a qwen-tts compatible API while using
 CUDA graphs for 6-10x speedup.
@@ -18,7 +18,7 @@ class Qwen3TTSCudaGraphs:
     """
     Qwen3-TTS model with CUDA graphs for real-time inference.
     
-    Compatible API with qwen-tts Qwen3TTSModel, but uses manual CUDA graph
+    Compatible API with qwen-tts Qwen3TTSModel, but uses CUDA graph
     capture for 6-10x speedup on NVIDIA GPUs.
     """
     
@@ -73,8 +73,8 @@ class Qwen3TTSCudaGraphs:
         
         # Import here to avoid dependency issues
         from qwen_tts import Qwen3TTSModel
-        from .manual_cudagraph_predictor import ManualPredictorGraph
-        from .manual_cudagraph_talker import ManualTalkerGraph
+        from .predictor_graph import PredictorGraph
+        from .talker_graph import TalkerGraph
         from transformers import PretrainedConfig
         
         # Load base model using qwen-tts library
@@ -104,7 +104,7 @@ class Qwen3TTSCudaGraphs:
         # Build CUDA graphs
         logger.info("Building CUDA graphs...")
         predictor = talker.code_predictor
-        predictor_graph = ManualPredictorGraph(
+        predictor_graph = PredictorGraph(
             predictor,
             pred_config,
             talker_hidden,
@@ -112,7 +112,7 @@ class Qwen3TTSCudaGraphs:
             dtype=dtype,
         )
         
-        talker_graph = ManualTalkerGraph(
+        talker_graph = TalkerGraph(
             talker.model,
             talker_config,
             device=device,
@@ -240,13 +240,13 @@ class Qwen3TTSCudaGraphs:
         Returns:
             Tuple of ([audio_waveform], sample_rate)
         """
-        from .fast_generate_v5 import fast_generate_v5
+        from .generate import fast_generate
 
         m, talker, config, tie, tam, tth, tpe = self._prepare_generation(
             text, ref_audio, ref_text
         )
 
-        codec_ids, timing = fast_generate_v5(
+        codec_ids, timing = fast_generate(
             talker=talker,
             talker_input_embeds=tie,
             attention_mask=tam,
@@ -325,7 +325,7 @@ class Qwen3TTSCudaGraphs:
         Yields:
             Tuple of (audio_chunk_numpy, sample_rate, timing_dict)
         """
-        from .streaming import fast_generate_v5_streaming
+        from .streaming import fast_generate_streaming
 
         m, talker, config, tie, tam, tth, tpe = self._prepare_generation(
             text, ref_audio, ref_text
@@ -343,7 +343,7 @@ class Qwen3TTSCudaGraphs:
         prev_audio_len = 0
         samples_per_frame = None
 
-        for codec_chunk, timing in fast_generate_v5_streaming(
+        for codec_chunk, timing in fast_generate_streaming(
             talker=talker,
             talker_input_embeds=tie,
             attention_mask=tam,

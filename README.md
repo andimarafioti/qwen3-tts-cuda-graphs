@@ -1,6 +1,6 @@
 # Qwen3-TTS CUDA Graphs
 
-Real-time Qwen3-TTS inference using manual CUDA graph capture. No Flash Attention, no vLLM, no Triton. Just `torch.cuda.CUDAGraph`. **1,038 lines of Python.** Supports both streaming and non-streaming generation.
+Real-time Qwen3-TTS inference using CUDA graph capture. No Flash Attention, no vLLM, no Triton. Just `torch.cuda.CUDAGraph`. **1,038 lines of Python.** Supports both streaming and non-streaming generation.
 
 ## Results
 
@@ -60,7 +60,7 @@ A single step involves ~500 small CUDA kernel launches with Python overhead betw
 CUDA graphs capture the entire decode step and replay it as a single GPU operation:
 
 1. **Static KV cache**: pre-allocated fixed-size tensors (no dynamic allocation)
-2. **Manual attention**: direct SDPA + RoPE, bypassing HF's DynamicCache
+2. **Model's own forward**: SDPA + RoPE via the model's native attention layers
 3. **Graph capture**: `torch.cuda.CUDAGraph` for both predictor and talker
 4. **Padded attention**: attention mask handles variable-length KV within fixed buffers
 
@@ -120,12 +120,12 @@ For production use, extract the speaker embedding once and reuse it:
 
 ```bash
 # 1. Extract speaker embedding from reference audio (one-time, ~10s)
-python extract_speaker.py --ref_audio voice.wav --output speaker.pt
+python examples/extract_speaker.py --ref_audio voice.wav --output speaker.pt
 
 # 2. Generate speech with CUDA graphs (real-time)
-python generate_xvec.py --speaker speaker.pt --text "Hello!" --language English --output en.wav
-python generate_xvec.py --speaker speaker.pt --text "Bonjour!" --language French --output fr.wav
-python generate_xvec.py --speaker speaker.pt --text "Hallo!" --language German --output de.wav
+python examples/generate_with_embedding.py --speaker speaker.pt --text "Hello!" --language English --output en.wav
+python examples/generate_with_embedding.py --speaker speaker.pt --text "Bonjour!" --language French --output fr.wav
+python examples/generate_with_embedding.py --speaker speaker.pt --text "Hallo!" --language German --output de.wav
 ```
 
 The speaker embedding is a 4KB file (2048-dim bf16 vector). In `x_vector_only` mode:
@@ -150,18 +150,21 @@ On the same H100 hardware: **~10x faster with ~7x less code** vs nano-qwen3tts-v
 
 ```
 qwen3_tts_cuda_graphs/
-  model.py                      # Wrapper API (404 lines)
-  fast_generate_v5.py           # Non-streaming generation loop (156 lines)
-  streaming.py                  # Streaming generation loop (178 lines)
-  manual_cudagraph_predictor.py # Predictor graph with StaticCache (156 lines)
-  manual_cudagraph_talker.py    # Talker graph with StaticCache (137 lines)
-extract_speaker.py              # Extract speaker embedding from ref audio
-generate_xvec.py                # End-to-end generation with precomputed speaker
-bench_v5.py                     # Benchmark (throughput + audio samples)
-bench_streaming.py              # Streaming benchmark (TTFA + chunk timing)
-bench_chunk_sweep.py            # Chunk size sweep (RTF vs latency tradeoff)
-benchmark.sh                    # Run benchmarks
-setup.sh                        # Setup venv + download models
+  model.py                        # Wrapper API (404 lines)
+  generate.py                     # Non-streaming generation loop (156 lines)
+  streaming.py                    # Streaming generation loop (178 lines)
+  predictor_graph.py              # Predictor CUDA graph with StaticCache (156 lines)
+  talker_graph.py                 # Talker CUDA graph with StaticCache (137 lines)
+examples/
+  extract_speaker.py              # Extract speaker embedding from ref audio
+  generate_with_embedding.py      # Generate with precomputed speaker embedding
+benchmarks/
+  throughput.py                   # Throughput benchmark (RTF + audio samples)
+  streaming.py                    # Streaming benchmark (TTFA + chunk timing)
+  chunk_sweep.py                  # Chunk size sweep (RTF vs latency tradeoff)
+  baseline.py                     # Baseline qwen-tts benchmark
+benchmark.sh                      # Run benchmarks
+setup.sh                          # Setup venv + download models
 ```
 
 Core implementation: **1,038 lines** of Python.
