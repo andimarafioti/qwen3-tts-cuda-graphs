@@ -1,0 +1,282 @@
+"""
+Qwen3TTSCudaGraphs: Real-time TTS using manual CUDA graph capture
+
+Wrapper class that provides a qwen-tts compatible API while using
+CUDA graphs for 6-10x speedup.
+"""
+import torch
+import numpy as np
+from pathlib import Path
+from typing import Optional, Tuple, Union
+import logging
+import json
+
+logger = logging.getLogger(__name__)
+
+
+class Qwen3TTSCudaGraphs:
+    """
+    Qwen3-TTS model with CUDA graphs for real-time inference.
+    
+    Compatible API with qwen-tts Qwen3TTSModel, but uses manual CUDA graph
+    capture for 6-10x speedup on NVIDIA GPUs.
+    """
+    
+    def __init__(
+        self,
+        base_model,
+        predictor_graph,
+        talker_graph,
+        device: str = "cuda",
+        dtype: torch.dtype = torch.bfloat16,
+        max_seq_len: int = 2048,
+    ):
+        self.model = base_model  # The qwen-tts Qwen3TTSModel instance
+        self.predictor_graph = predictor_graph
+        self.talker_graph = talker_graph
+        self.device = device
+        self.dtype = dtype
+        self.max_seq_len = max_seq_len
+        self.sample_rate = 12000  # Qwen3-TTS uses 12kHz
+        self._warmed_up = False
+        
+    @classmethod
+    def from_pretrained(
+        cls,
+        model_name: str,
+        device: str = "cuda",
+        dtype: Union[str, torch.dtype] = torch.bfloat16,
+        attn_implementation: str = "eager",
+        max_seq_len: int = 2048,
+    ):
+        """
+        Load Qwen3-TTS model and prepare CUDA graphs.
+        
+        Args:
+            model_name: Model path or HuggingFace Hub ID
+            device: Device to use ("cuda" or "cpu")
+            dtype: Data type for inference
+            attn_implementation: Attention implementation (use "eager" on Jetson)
+            max_seq_len: Maximum sequence length for static cache
+            
+        Returns:
+            Qwen3TTSCudaGraphs instance
+        """
+        if isinstance(dtype, str):
+            dtype = getattr(torch, dtype)
+            
+        if device != "cuda" or not torch.cuda.is_available():
+            raise ValueError("CUDA graphs require CUDA device")
+        
+        logger.info(f"Loading Qwen3-TTS model: {model_name}")
+        
+        # Import here to avoid dependency issues
+        from qwen_tts import Qwen3TTSModel
+        from .manual_cudagraph_predictor import ManualPredictorGraph
+        from .manual_cudagraph_talker import ManualTalkerGraph
+        from transformers import PretrainedConfig
+        
+        # Load base model using qwen-tts library
+        base_model = Qwen3TTSModel.from_pretrained(
+            model_name,
+            device_map="cuda:0",
+            torch_dtype=dtype,
+            attn_implementation=attn_implementation,
+        )
+        
+        talker = base_model.model.talker
+        talker_config = base_model.model.config.talker_config
+        
+        # Load predictor config
+        model_path = Path(model_name)
+        config_path = model_path / "config.json" if model_path.exists() else None
+        if config_path and config_path.exists():
+            with open(config_path) as f:
+                fc = json.load(f)
+            pred_config = PretrainedConfig(**fc['talker_config']['code_predictor_config'])
+            talker_hidden = fc['talker_config']['hidden_size']
+        else:
+            # Fall back to extracting from model
+            pred_config = predictor.model.config
+            talker_hidden = talker_config.hidden_size
+        
+        # Build CUDA graphs
+        logger.info("Building CUDA graphs...")
+        predictor = talker.code_predictor
+        predictor_graph = ManualPredictorGraph(
+            predictor,
+            pred_config,
+            talker_hidden,
+            device=device,
+            dtype=dtype,
+        )
+        
+        talker_graph = ManualTalkerGraph(
+            talker.model,
+            talker_config,
+            device=device,
+            dtype=dtype,
+            max_seq_len=max_seq_len,
+        )
+        
+        logger.info("CUDA graphs initialized (will capture on first run)")
+        
+        return cls(
+            base_model=base_model,
+            predictor_graph=predictor_graph,
+            talker_graph=talker_graph,
+            device=device,
+            dtype=dtype,
+            max_seq_len=max_seq_len,
+        )
+    
+    def _warmup(self, prefill_len: int):
+        """Warm up and capture CUDA graphs with given prefill length."""
+        if self._warmed_up:
+            return
+            
+        logger.info("Warming up CUDA graphs...")
+        self.predictor_graph.capture(num_warmup=3)
+        self.talker_graph.capture(prefill_len=prefill_len, num_warmup=3)
+        self._warmed_up = True
+        logger.info("CUDA graphs captured and ready")
+    
+    def generate(
+        self,
+        text: str,
+        language: str = "English",
+        max_new_tokens: int = 2048,
+        temperature: float = 0.9,
+        top_k: int = 50,
+        do_sample: bool = True,
+        repetition_penalty: float = 1.05,
+    ) -> Tuple[list, int]:
+        """
+        Generate speech from text using default voice.
+        
+        Not yet implemented - use generate_voice_clone() instead.
+        """
+        raise NotImplementedError(
+            "Default voice generation not yet implemented. "
+            "Use generate_voice_clone() with reference audio."
+        )
+    
+    @torch.inference_mode()
+    def generate_voice_clone(
+        self,
+        text: str,
+        language: str,
+        ref_audio: Union[str, Path],
+        ref_text: str,
+        max_new_tokens: int = 2048,
+        temperature: float = 0.9,
+        top_k: int = 50,
+        do_sample: bool = True,
+        repetition_penalty: float = 1.05,
+    ) -> Tuple[list, int]:
+        """
+        Generate speech with voice cloning using reference audio.
+        
+        Args:
+            text: Text to synthesize
+            language: Target language
+            ref_audio: Path to reference audio file
+            ref_text: Transcription of reference audio
+            max_new_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+            top_k: Top-k sampling
+            do_sample: Whether to sample
+            repetition_penalty: Repetition penalty
+            
+        Returns:
+            Tuple of ([audio_waveform], sample_rate)
+        """
+        from .fast_generate_v5 import fast_generate_v5
+        
+        # Prepare inputs using qwen-tts model
+        input_texts = [f"<|im_start|>assistant\n{text}<|im_end|>\n<|im_start|>assistant\n"]
+        input_ids = []
+        for t in input_texts:
+            inp = self.model.processor(text=t, return_tensors="pt", padding=True)
+            iid = inp["input_ids"].to(self.model.device)
+            input_ids.append(iid.unsqueeze(0) if iid.dim() == 1 else iid)
+        
+        # Create voice clone prompt
+        prompt_items = self.model.create_voice_clone_prompt(
+            ref_audio=str(ref_audio),
+            ref_text=ref_text
+        )
+        vcp = self.model._prompt_items_to_voice_clone_prompt(prompt_items)
+        
+        ref_ids = []
+        rt = prompt_items[0].ref_text
+        if rt:
+            ref_ids.append(
+                self.model._tokenize_texts([f"<|im_start|>assistant\n{rt}<|im_end|>\n"])[0]
+            )
+        
+        # Build talker inputs
+        m = self.model.model
+        tie, tam, tth, tpe = m._build_talker_inputs(
+            input_ids=input_ids,
+            instruct_ids=None,
+            ref_ids=ref_ids,
+            voice_clone_prompt=vcp,
+            languages=["Auto"],
+            speakers=None,
+            non_streaming_mode=False,
+        )
+        
+        # Warm up graphs on first call with this prefill length
+        prefill_len = tie.shape[1]
+        if not self._warmed_up:
+            self._warmup(prefill_len)
+        
+        # Run CUDA-graphed generation
+        talker = m.talker
+        config = m.config.talker_config
+        talker.rope_deltas = None  # Reset rope deltas
+        
+        codec_ids, timing = fast_generate_v5(
+            talker=talker,
+            talker_input_embeds=tie,
+            attention_mask=tam,
+            trailing_text_hiddens=tth,
+            tts_pad_embed=tpe,
+            config=config,
+            predictor_graph=self.predictor_graph,
+            talker_graph=self.talker_graph,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_k=top_k,
+            do_sample=do_sample,
+            repetition_penalty=repetition_penalty,
+        )
+        
+        if codec_ids is None:
+            logger.warning("Generation returned no tokens")
+            return [np.zeros(1, dtype=np.float32)], self.sample_rate
+        
+        # Decode codec IDs to audio
+        speech_tokenizer = m.speech_tokenizer
+        audio_list, sr = speech_tokenizer.decode({"audio_codes": codec_ids.unsqueeze(0)})
+        
+        # Convert to numpy arrays (handle both torch tensors and numpy arrays)
+        audio_arrays = []
+        for a in audio_list:
+            if hasattr(a, 'cpu'):  # torch tensor
+                audio_arrays.append(a.flatten().cpu().numpy())
+            else:  # already numpy
+                audio_arrays.append(a.flatten() if hasattr(a, 'flatten') else a)
+        
+        n_steps = timing['steps']
+        audio_duration = n_steps / 12.0  # 12 Hz codec
+        total_time = timing['prefill_ms']/1000 + timing['decode_s']
+        rtf = audio_duration / total_time if total_time > 0 else 0
+        
+        logger.info(
+            f"Generated {audio_duration:.2f}s audio in {total_time:.2f}s "
+            f"({timing['ms_per_step']:.1f}ms/step, RTF: {rtf:.2f})"
+        )
+        
+        return audio_arrays, sr
