@@ -48,6 +48,8 @@ On **edge devices (Jetson Orin)**: Baseline can't keep up (RTF 0.13–0.18). CUD
 
 **The 4090 Wins Single-Stream:** For batch=1 workloads, the RTX 4090 outperforms the H100. The H100's lower baseline (RTF 0.59 vs 4090's 1.34) reflects its design for batch processing. Even with CUDA graphs, the 4090's higher clocks (**2.5 GHz vs 1.8 GHz**) translate to better single-stream performance.
 
+**Why the DGX Spark barely benefits (1.2x):** CUDA graphs eliminate kernel launch overhead — the CPU can't dispatch ~500 small kernels per step fast enough, so the GPU idles between them. The DGX Spark's Grace CPU (72 Neoverse V2 cores) is fast enough to keep up with its modest GB10 GPU, so there's little overhead to eliminate. Compare the Jetson Orin: its 12 Cortex-A78AE cores can't feed the GPU fast enough, yielding 7.9x from CUDA graphs. The H100 and 4090 have fast GPUs that outpace their CPUs, yielding 5–6x. The Spark is the most CPU/GPU-balanced system we tested — it reaches respectable absolute RTF (1.44) but gets there mostly without CUDA graphs' help.
+
 ## How We Did It (The "Magic")
 
 We didn't rewrite the model in C++ or use a complex serving engine like vLLM. We kept it entirely within the PyTorch/Hugging Face ecosystem, using just **1,038 lines of Python** (including streaming), and we didn't reimplement a single attention layer.
