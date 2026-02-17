@@ -108,9 +108,11 @@ On the same H100 hardware: **~10x faster with ~10x less code** vs nano-qwen3tts-
 ## Files
 
 ```
-manual_cudagraph_predictor.py   # Predictor graph (261 lines)
-manual_cudagraph_talker.py      # Talker graph (341 lines)
-fast_generate_v5.py             # Full generation loop (156 lines)
+qwen3_tts_cuda_graphs/
+  model.py                      # Wrapper API (289 lines)
+  manual_cudagraph_predictor.py # Predictor graph with StaticCache (156 lines)
+  manual_cudagraph_talker.py    # Talker graph with StaticCache (137 lines)
+  fast_generate_v5.py           # Full generation loop (156 lines)
 extract_speaker.py              # Extract speaker embedding from ref audio
 generate_xvec.py                # End-to-end generation with precomputed speaker
 bench_v5.py                     # Benchmark (throughput + TTFA + audio samples)
