@@ -25,7 +25,7 @@ Our optimized implementation not only matched the Qwen team's latency claims but
 | GPU | Baseline RTF | Baseline TTFA | CUDA Graphs RTF | CUDA Graphs TTFA | Speedup |
 |---|---|---|---|---|---|
 | Jetson AGX Orin 64GB | 0.175 | 2,572ms | **1.38** | **216ms** | 7.9x |
-| RTX 4090 | 1.34 | 462ms | TBD | TBD | TBD |
+| RTX 4090 | 1.34 | 462ms | **4.56** | **55ms** | 3.4x / 8.4x |
 | DGX Spark (GB10) | TBD | TBD | TBD | TBD | TBD |
 | H100 80GB HBM3 | TBD | TBD | TBD | TBD | TBD |
 
@@ -34,17 +34,19 @@ Our optimized implementation not only matched the Qwen team's latency claims but
 | GPU | Baseline RTF | Baseline TTFA | CUDA Graphs RTF | CUDA Graphs TTFA | Speedup |
 |---|---|---|---|---|---|
 | Jetson AGX Orin 64GB | 0.130 | 2,594ms | **1.13** | **237ms** | 8.7x |
-| RTX 4090 | 1.32 | 468ms | TBD | TBD | TBD |
+| RTX 4090 | 1.32 | 468ms | **4.06** | **58ms** | 3.1x / 8.1x |
 | DGX Spark (GB10) | TBD | TBD | TBD | TBD | TBD |
 | H100 80GB HBM3 | TBD | TBD | TBD | TBD | TBD |
 
-RTF > 1.0 = faster than real-time. TTFA = Time to First Audio, measured as time to first playable audio chunk. Baseline uses standard qwen-tts, CUDA graphs uses `Qwen3TTSCudaGraphs` wrapper. Both include text tokenization for fair comparison.
+RTF > 1.0 = faster than real-time. TTFA = Time to First Audio, measured as time to first playable audio chunk. Baseline uses standard qwen-tts, CUDA graphs uses `Qwen3TTSCudaGraphs` wrapper. Both include text tokenization for fair comparison. Speedup shows throughput / TTFA improvement.
 
-**Interesting Finding on RTX 4090:** Even the baseline (without CUDA graphs) achieves RTF > 1.0 on high-end GPUs like the 4090! The 4090 is so fast that Python overhead doesn't bottleneck it as much. CUDA graphs still matter for TTFA reduction (462ms → TBD) and consistency.
+**Two Stories, One Optimization:**
 
-**Edge is Where CUDA Graphs Shine:** On Jetson Orin, the baseline can't keep up (RTF 0.13–0.18), but CUDA graphs unlock real-time performance (RTF 1.13–1.38). The speedup is **7.9x to 8.7x** — this is where eliminating Python overhead makes the difference between unusable and production-ready.
+On **high-end GPUs (RTX 4090)**: Baseline already achieves RTF > 1.0, so CUDA graphs aren't about making it "real-time" — they're about **latency reduction**. TTFA drops **8.4x** (462ms → 55ms), while throughput improves 3.4x. This matters for interactive applications where users notice first-word delay.
 
-**Sub-250ms Latency Achieved:** Jetson Orin delivers 216ms (0.6B) and 237ms (1.7B) TTFA, making it viable for real-time edge voice interaction with acceptable latency.
+On **edge devices (Jetson Orin)**: Baseline can't keep up (RTF 0.13–0.18). CUDA graphs deliver **7.9x–8.7x** speedup, crossing the real-time threshold (RTF 1.13–1.38). This is the difference between unusable and production-ready.
+
+**Sub-60ms Latency on 4090:** With 55ms (0.6B) and 58ms (1.7B) TTFA, the 4090 delivers conversational-grade latency. Even Jetson Orin hits sub-250ms (216ms/237ms), acceptable for voice assistants and robotics.
 
 ## How We Did It (The "Magic")
 
