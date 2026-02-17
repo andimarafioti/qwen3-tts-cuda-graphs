@@ -25,7 +25,7 @@ Our optimized implementation not only matched the Qwen team's latency claims but
 | GPU | Baseline RTF | Baseline TTFA | CUDA Graphs RTF | CUDA Graphs TTFA | Speedup |
 |---|---|---|---|---|---|
 | Jetson AGX Orin 64GB | 0.175 | 2,572ms | **1.38** | **216ms** | 7.9x |
-| DGX Spark (GB10) | 1.19 | 631ms | **1.42** | **147ms** | 1.2x / 4.3x |
+| DGX Spark (GB10) | 1.19 | 631ms | **1.44** | **113ms** | 1.2x / 5.6x |
 | RTX 4090 | 1.34 | 462ms | **4.56** | **55ms** | 3.4x / 8.4x |
 | H100 80GB HBM3 | TBD | TBD | TBD | TBD | TBD |
 
@@ -34,7 +34,7 @@ Our optimized implementation not only matched the Qwen team's latency claims but
 | GPU | Baseline RTF | Baseline TTFA | CUDA Graphs RTF | CUDA Graphs TTFA | Speedup |
 |---|---|---|---|---|---|
 | Jetson AGX Orin 64GB | 0.130 | 2,594ms | **1.13** | **237ms** | 8.7x |
-| DGX Spark (GB10) | 0.975 | 749ms | **1.16** | **180ms** | 1.2x / 4.2x |
+| DGX Spark (GB10) | 0.975 | 749ms | **1.16** | **196ms** | 1.2x / 3.8x |
 | RTX 4090 | 1.32 | 468ms | **4.06** | **58ms** | 3.1x / 8.1x |
 | H100 80GB HBM3 | TBD | TBD | TBD | TBD | TBD |
 
