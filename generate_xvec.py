@@ -51,9 +51,9 @@ def main():
     import soundfile as sf
     from qwen_tts import Qwen3TTSModel
     from transformers import PretrainedConfig
-    from manual_cudagraph_predictor import ManualPredictorGraph
-    from manual_cudagraph_talker import ManualTalkerGraph
-    from fast_generate_v5 import fast_generate_v5
+    from qwen3_tts_cuda_graphs.manual_cudagraph_predictor import ManualPredictorGraph
+    from qwen3_tts_cuda_graphs.manual_cudagraph_talker import ManualTalkerGraph
+    from qwen3_tts_cuda_graphs.fast_generate_v5 import fast_generate_v5
 
     print(f"Loading model from {args.model_path}...")
     model = Qwen3TTSModel.from_pretrained(args.model_path, device_map=args.device, dtype=torch.bfloat16)

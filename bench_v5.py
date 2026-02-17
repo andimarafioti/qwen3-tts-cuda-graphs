@@ -7,9 +7,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from qwen_tts import Qwen3TTSModel
 from transformers import PretrainedConfig
-from manual_cudagraph_predictor import ManualPredictorGraph
-from manual_cudagraph_talker import ManualTalkerGraph
-from fast_generate_v5 import fast_generate_v5
+from qwen3_tts_cuda_graphs.manual_cudagraph_predictor import ManualPredictorGraph
+from qwen3_tts_cuda_graphs.manual_cudagraph_talker import ManualTalkerGraph
+from qwen3_tts_cuda_graphs.fast_generate_v5 import fast_generate_v5
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_SIZE = os.environ.get('MODEL_SIZE', '0.6B')
