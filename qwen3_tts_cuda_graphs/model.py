@@ -39,6 +39,7 @@ class Qwen3TTSCudaGraphs:
         self.max_seq_len = max_seq_len
         self.sample_rate = 12000  # Qwen3-TTS uses 12kHz
         self._warmed_up = False
+        self._voice_prompt_cache = {}  # Cache (ref_audio, ref_text) -> (vcp, ref_ids)
         
     @classmethod
     def from_pretrained(
@@ -201,19 +202,25 @@ class Qwen3TTSCudaGraphs:
             iid = inp["input_ids"].to(self.model.device)
             input_ids.append(iid.unsqueeze(0) if iid.dim() == 1 else iid)
         
-        # Create voice clone prompt
-        prompt_items = self.model.create_voice_clone_prompt(
-            ref_audio=str(ref_audio),
-            ref_text=ref_text
-        )
-        vcp = self.model._prompt_items_to_voice_clone_prompt(prompt_items)
-        
-        ref_ids = []
-        rt = prompt_items[0].ref_text
-        if rt:
-            ref_ids.append(
-                self.model._tokenize_texts([f"<|im_start|>assistant\n{rt}<|im_end|>\n"])[0]
+        # Cache voice clone prompt (expensive: loads audio, extracts features, ~110ms)
+        cache_key = (str(ref_audio), ref_text)
+        if cache_key in self._voice_prompt_cache:
+            vcp, ref_ids = self._voice_prompt_cache[cache_key]
+        else:
+            prompt_items = self.model.create_voice_clone_prompt(
+                ref_audio=str(ref_audio),
+                ref_text=ref_text
             )
+            vcp = self.model._prompt_items_to_voice_clone_prompt(prompt_items)
+            
+            ref_ids = []
+            rt = prompt_items[0].ref_text
+            if rt:
+                ref_ids.append(
+                    self.model._tokenize_texts([f"<|im_start|>assistant\n{rt}<|im_end|>\n"])[0]
+                )
+            
+            self._voice_prompt_cache[cache_key] = (vcp, ref_ids)
         
         # Build talker inputs
         m = self.model.model
