@@ -24,8 +24,8 @@ Our optimized implementation not only matched the Qwen team's latency claims but
 
 | GPU | Baseline RTF | CUDA Graphs RTF | Speedup | TTFA |
 |---|---|---|---|---|
-| Jetson AGX Orin 64GB | 0.175 | **1.55** | 8.8x | 77ms |
-| DGX Spark (GB10) | — | **1.52** | — | 88ms |
+| Jetson AGX Orin 64GB | 0.175 | **1.55** | 8.8x | 162ms |
+| DGX Spark (GB10) | — | **1.49** | — | 86ms |
 | RTX 4090 | — | **5.06** | — | **36ms** |
 | H100 80GB HBM3 | — | **3.92** | — | 63ms |
 
@@ -33,14 +33,14 @@ Our optimized implementation not only matched the Qwen team's latency claims but
 
 | GPU | Baseline RTF | CUDA Graphs RTF | Speedup | TTFA |
 |---|---|---|---|---|
-| Jetson AGX Orin 64GB | 0.130 | **1.24** | 9.5x | 77ms |
-| DGX Spark (GB10) | — | **1.35** | — | 142ms |
+| Jetson AGX Orin 64GB | 0.130 | **1.24** | 9.5x | 174ms |
+| DGX Spark (GB10) | — | **1.23** | — | 104ms |
 | RTX 4090 | — | **4.46** | — | **39ms** |
 | H100 80GB HBM3 | — | **3.80** | — | 64ms |
 
 RTF > 1.0 = faster than real-time. TTFA = Time to First Audio, measured as time to first playable audio chunk.
 
-**Verified Latency:** On the RTX 4090, we achieved **36ms** latency — well under the 97ms benchmark from the tech report. Even the Jetson Orin hit 77ms, making it viable for real-time edge voice interaction.
+**Verified Latency:** On the RTX 4090, we achieved **36ms** latency — well under the 97ms benchmark from the tech report. Even the Jetson Orin hit 162ms (0.6B) and 174ms (1.7B), making it viable for real-time edge voice interaction with sub-200ms latency.
 
 **The 4090 Surprise:** For single-user (batch=1) workloads, the RTX 4090 actually outperformed the H100. At batch=1, each operation's matrices are too small to saturate the H100's massive compute and memory bandwidth. In this latency-bound regime, the 4090's ~38% higher clock speed (2.5 GHz vs 1.8 GHz) translates directly into faster per-step execution.
 
