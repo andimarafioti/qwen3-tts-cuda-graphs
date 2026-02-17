@@ -11,20 +11,22 @@ Benchmarks include tokenization + inference (apples-to-apples with baseline). RT
 | GPU | Baseline RTF | Baseline TTFA | CUDA Graphs RTF | CUDA Graphs TTFA | Speedup |
 |---|---|---|---|---|---|
 | Jetson AGX Orin 64GB | 0.175 | 2,572ms | 1.38 | 216ms | 7.9x |
-| DGX Spark (GB10) | 1.19 | 631ms | **1.44** | **113ms** | 1.2x / 5.6x |
+| DGX Spark (GB10) | 1.19 | 631ms | 1.44 | 113ms | 1.2x / 5.6x |
 | RTX 4090 | 1.34 | 462ms | **4.56** | **55ms** | 3.4x / 8.4x |
-| H100 80GB HBM3 | TBD | TBD | TBD | TBD | TBD |
+| H100 80GB HBM3 | 0.59 | 1,049ms | **3.47** | **100ms** | 5.9x / 10.5x |
 
 ### 1.7B Model
 
 | GPU | Baseline RTF | Baseline TTFA | CUDA Graphs RTF | CUDA Graphs TTFA | Speedup |
 |---|---|---|---|---|---|
 | Jetson AGX Orin 64GB | 0.130 | 2,594ms | 1.13 | 237ms | 8.7x |
-| DGX Spark (GB10) | 0.975 | 749ms | **1.16** | **196ms** | 1.2x / 3.8x |
+| DGX Spark (GB10) | 0.975 | 749ms | 1.16 | 196ms | 1.2x / 3.8x |
 | RTX 4090 | 1.32 | 468ms | **4.06** | **58ms** | 3.1x / 8.1x |
-| H100 80GB HBM3 | TBD | TBD | TBD | TBD | TBD |
+| H100 80GB HBM3 | 0.59 | 1,045ms | **3.30** | **104ms** | 5.6x / 10.0x |
 
 **Note:** Baseline uses standard qwen-tts. CUDA graphs uses `Qwen3TTSCudaGraphs` wrapper with voice prompt caching. Both include text tokenization overhead for fair comparison. Speedup shows throughput improvement / TTFA improvement (e.g., "3.4x / 8.4x" = 3.4x faster generation, 8.4x lower latency).
+
+**⚠️ H100 baseline anomaly:** Baseline RTF 0.59 is unexpectedly slow (slower than 4090, GB10, even Orin). May be hitting a generation bug or config issue. CUDA graphs results are solid (RTF 3.47/3.30, sub-105ms latency) but 4090 still wins on single-stream throughput due to higher clocks.
 
 ## Quick Start
 

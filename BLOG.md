@@ -25,18 +25,18 @@ Our optimized implementation not only matched the Qwen team's latency claims but
 | GPU | Baseline RTF | Baseline TTFA | CUDA Graphs RTF | CUDA Graphs TTFA | Speedup |
 |---|---|---|---|---|---|
 | Jetson AGX Orin 64GB | 0.175 | 2,572ms | **1.38** | **216ms** | 7.9x |
-| DGX Spark (GB10) | 1.19 | 631ms | **1.44** | **113ms** | 1.2x / 5.6x |
+| DGX Spark (GB10) | 1.19 | 631ms | 1.44 | 113ms | 1.2x / 5.6x |
 | RTX 4090 | 1.34 | 462ms | **4.56** | **55ms** | 3.4x / 8.4x |
-| H100 80GB HBM3 | TBD | TBD | TBD | TBD | TBD |
+| H100 80GB HBM3 | 0.59 | 1,049ms | **3.47** | **100ms** | 5.9x / 10.5x |
 
 ### 1.7B Model
 
 | GPU | Baseline RTF | Baseline TTFA | CUDA Graphs RTF | CUDA Graphs TTFA | Speedup |
 |---|---|---|---|---|---|
 | Jetson AGX Orin 64GB | 0.130 | 2,594ms | **1.13** | **237ms** | 8.7x |
-| DGX Spark (GB10) | 0.975 | 749ms | **1.16** | **196ms** | 1.2x / 3.8x |
+| DGX Spark (GB10) | 0.975 | 749ms | 1.16 | 196ms | 1.2x / 3.8x |
 | RTX 4090 | 1.32 | 468ms | **4.06** | **58ms** | 3.1x / 8.1x |
-| H100 80GB HBM3 | TBD | TBD | TBD | TBD | TBD |
+| H100 80GB HBM3 | 0.59 | 1,045ms | **3.30** | **104ms** | 5.6x / 10.0x |
 
 RTF > 1.0 = faster than real-time. TTFA = Time to First Audio, measured as time to first playable audio chunk. Baseline uses standard qwen-tts, CUDA graphs uses `Qwen3TTSCudaGraphs` wrapper. Both include text tokenization for fair comparison. Speedup shows throughput / TTFA improvement.
 
@@ -46,7 +46,9 @@ On **high-end GPUs (RTX 4090)**: Baseline already achieves RTF > 1.0, so CUDA gr
 
 On **edge devices (Jetson Orin)**: Baseline can't keep up (RTF 0.13–0.18). CUDA graphs deliver **7.9x–8.7x** speedup, crossing the real-time threshold (RTF 1.13–1.38). This is the difference between unusable and production-ready.
 
-**Sub-60ms Latency on 4090:** With 55ms (0.6B) and 58ms (1.7B) TTFA, the 4090 delivers conversational-grade latency. Even Jetson Orin hits sub-250ms (216ms/237ms), acceptable for voice assistants and robotics.
+**The 4090 Still Wins:** For single-stream TTS (batch=1), the RTX 4090 outperforms the H100. With **55ms TTFA** (0.6B) and **58ms TTFA** (1.7B), the 4090 delivers the lowest latency across all tested GPUs. The H100's baseline was unexpectedly slow (RTF 0.59 vs 4090's 1.34), possibly hitting a generation bug. Even with CUDA graphs, the 4090's higher clocks (2.5 GHz vs 1.8 GHz) translate to better single-stream performance. For batch workloads, H100 would likely dominate.
+
+**Sub-60ms Conversational Latency:** The 4090 achieves sub-60ms TTFA, gold standard for conversational AI. Even Jetson Orin hits sub-250ms (216ms/237ms), acceptable for voice assistants and robotics.
 
 ## How We Did It (The "Magic")
 
