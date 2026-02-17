@@ -7,7 +7,7 @@ CUDA graphs for 6-10x speedup.
 import torch
 import numpy as np
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import Generator, Optional, Tuple, Union
 import logging
 import json
 
@@ -162,6 +162,54 @@ class Qwen3TTSCudaGraphs:
             "Use generate_voice_clone() with reference audio."
         )
     
+    def _prepare_generation(self, text: str, ref_audio: Union[str, Path], ref_text: str):
+        """Prepare inputs for generation (shared by streaming and non-streaming)."""
+        input_texts = [f"<|im_start|>assistant\n{text}<|im_end|>\n<|im_start|>assistant\n"]
+        input_ids = []
+        for t in input_texts:
+            inp = self.model.processor(text=t, return_tensors="pt", padding=True)
+            iid = inp["input_ids"].to(self.model.device)
+            input_ids.append(iid.unsqueeze(0) if iid.dim() == 1 else iid)
+
+        cache_key = (str(ref_audio), ref_text)
+        if cache_key in self._voice_prompt_cache:
+            vcp, ref_ids = self._voice_prompt_cache[cache_key]
+        else:
+            prompt_items = self.model.create_voice_clone_prompt(
+                ref_audio=str(ref_audio),
+                ref_text=ref_text
+            )
+            vcp = self.model._prompt_items_to_voice_clone_prompt(prompt_items)
+
+            ref_ids = []
+            rt = prompt_items[0].ref_text
+            if rt:
+                ref_ids.append(
+                    self.model._tokenize_texts([f"<|im_start|>assistant\n{rt}<|im_end|>\n"])[0]
+                )
+
+            self._voice_prompt_cache[cache_key] = (vcp, ref_ids)
+
+        m = self.model.model
+        tie, tam, tth, tpe = m._build_talker_inputs(
+            input_ids=input_ids,
+            instruct_ids=None,
+            ref_ids=ref_ids,
+            voice_clone_prompt=vcp,
+            languages=["Auto"],
+            speakers=None,
+            non_streaming_mode=False,
+        )
+
+        if not self._warmed_up:
+            self._warmup(tie.shape[1])
+
+        talker = m.talker
+        config = m.config.talker_config
+        talker.rope_deltas = None
+
+        return m, talker, config, tie, tam, tth, tpe
+
     @torch.inference_mode()
     def generate_voice_clone(
         self,
@@ -177,7 +225,7 @@ class Qwen3TTSCudaGraphs:
     ) -> Tuple[list, int]:
         """
         Generate speech with voice cloning using reference audio.
-        
+
         Args:
             text: Text to synthesize
             language: Target language
@@ -188,62 +236,16 @@ class Qwen3TTSCudaGraphs:
             top_k: Top-k sampling
             do_sample: Whether to sample
             repetition_penalty: Repetition penalty
-            
+
         Returns:
             Tuple of ([audio_waveform], sample_rate)
         """
         from .fast_generate_v5 import fast_generate_v5
-        
-        # Prepare inputs using qwen-tts model
-        input_texts = [f"<|im_start|>assistant\n{text}<|im_end|>\n<|im_start|>assistant\n"]
-        input_ids = []
-        for t in input_texts:
-            inp = self.model.processor(text=t, return_tensors="pt", padding=True)
-            iid = inp["input_ids"].to(self.model.device)
-            input_ids.append(iid.unsqueeze(0) if iid.dim() == 1 else iid)
-        
-        # Cache voice clone prompt (expensive: loads audio, extracts features, ~110ms)
-        cache_key = (str(ref_audio), ref_text)
-        if cache_key in self._voice_prompt_cache:
-            vcp, ref_ids = self._voice_prompt_cache[cache_key]
-        else:
-            prompt_items = self.model.create_voice_clone_prompt(
-                ref_audio=str(ref_audio),
-                ref_text=ref_text
-            )
-            vcp = self.model._prompt_items_to_voice_clone_prompt(prompt_items)
-            
-            ref_ids = []
-            rt = prompt_items[0].ref_text
-            if rt:
-                ref_ids.append(
-                    self.model._tokenize_texts([f"<|im_start|>assistant\n{rt}<|im_end|>\n"])[0]
-                )
-            
-            self._voice_prompt_cache[cache_key] = (vcp, ref_ids)
-        
-        # Build talker inputs
-        m = self.model.model
-        tie, tam, tth, tpe = m._build_talker_inputs(
-            input_ids=input_ids,
-            instruct_ids=None,
-            ref_ids=ref_ids,
-            voice_clone_prompt=vcp,
-            languages=["Auto"],
-            speakers=None,
-            non_streaming_mode=False,
+
+        m, talker, config, tie, tam, tth, tpe = self._prepare_generation(
+            text, ref_audio, ref_text
         )
-        
-        # Warm up graphs on first call with this prefill length
-        prefill_len = tie.shape[1]
-        if not self._warmed_up:
-            self._warmup(prefill_len)
-        
-        # Run CUDA-graphed generation
-        talker = m.talker
-        config = m.config.talker_config
-        talker.rope_deltas = None  # Reset rope deltas
-        
+
         codec_ids, timing = fast_generate_v5(
             talker=talker,
             talker_input_embeds=tie,
@@ -287,3 +289,116 @@ class Qwen3TTSCudaGraphs:
         )
         
         return audio_arrays, sr
+
+    @torch.inference_mode()
+    def generate_voice_clone_streaming(
+        self,
+        text: str,
+        language: str,
+        ref_audio: Union[str, Path],
+        ref_text: str,
+        max_new_tokens: int = 2048,
+        temperature: float = 0.9,
+        top_k: int = 50,
+        do_sample: bool = True,
+        repetition_penalty: float = 1.05,
+        chunk_size: int = 12,
+    ) -> Generator[Tuple[np.ndarray, int, dict], None, None]:
+        """
+        Stream voice-cloned speech generation, yielding audio chunks.
+
+        Same as generate_voice_clone() but yields (audio_chunk, sample_rate, timing)
+        tuples every chunk_size codec steps (~chunk_size/12 seconds of audio).
+
+        Args:
+            text: Text to synthesize
+            language: Target language
+            ref_audio: Path to reference audio file
+            ref_text: Transcription of reference audio
+            max_new_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+            top_k: Top-k sampling
+            do_sample: Whether to sample
+            repetition_penalty: Repetition penalty
+            chunk_size: Codec steps per chunk (12 = ~1 second)
+
+        Yields:
+            Tuple of (audio_chunk_numpy, sample_rate, timing_dict)
+        """
+        from .streaming import fast_generate_v5_streaming
+
+        m, talker, config, tie, tam, tth, tpe = self._prepare_generation(
+            text, ref_audio, ref_text
+        )
+
+        speech_tokenizer = m.speech_tokenizer
+
+        # Hybrid decode strategy:
+        # 1. Accumulated decode for early chunks (correct, calibrates samples_per_frame)
+        # 2. Sliding window with 25-frame left context once calibrated (constant cost)
+        # This avoids boundary artifacts (pops) while keeping decode cost bounded.
+        context_frames = 25
+        min_calibration_frames = max(context_frames, chunk_size)
+        all_codes = []
+        prev_audio_len = 0
+        samples_per_frame = None
+
+        for codec_chunk, timing in fast_generate_v5_streaming(
+            talker=talker,
+            talker_input_embeds=tie,
+            attention_mask=tam,
+            trailing_text_hiddens=tth,
+            tts_pad_embed=tpe,
+            config=config,
+            predictor_graph=self.predictor_graph,
+            talker_graph=self.talker_graph,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_k=top_k,
+            do_sample=do_sample,
+            repetition_penalty=repetition_penalty,
+            chunk_size=chunk_size,
+        ):
+            all_codes.append(codec_chunk)
+            n_new = codec_chunk.shape[0]
+            all_flat = torch.cat(all_codes, dim=0)
+            n_total = all_flat.shape[0]
+
+            if samples_per_frame is None:
+                # Phase 1: accumulated decode until we can calibrate
+                audio_list, sr = speech_tokenizer.decode(
+                    {"audio_codes": all_flat.unsqueeze(0)}
+                )
+                audio = audio_list[0]
+                if hasattr(audio, 'cpu'):
+                    audio = audio.flatten().cpu().numpy()
+                else:
+                    audio = audio.flatten() if hasattr(audio, 'flatten') else audio
+
+                new_audio = audio[prev_audio_len:]
+                prev_audio_len = len(audio)
+
+                if n_total >= min_calibration_frames:
+                    samples_per_frame = len(audio) / n_total
+            else:
+                # Phase 2: sliding window with left context
+                ctx_start = max(0, n_total - n_new - context_frames)
+                window = all_flat[ctx_start:]
+                n_ctx = window.shape[0] - n_new
+
+                audio_list, sr = speech_tokenizer.decode(
+                    {"audio_codes": window.unsqueeze(0)}
+                )
+                audio = audio_list[0]
+                if hasattr(audio, 'cpu'):
+                    audio = audio.flatten().cpu().numpy()
+                else:
+                    audio = audio.flatten() if hasattr(audio, 'flatten') else audio
+
+                if n_ctx > 0:
+                    ctx_samples = int(round(n_ctx * samples_per_frame))
+                    new_audio = audio[ctx_samples:]
+                else:
+                    new_audio = audio
+
+            yield new_audio, sr, timing

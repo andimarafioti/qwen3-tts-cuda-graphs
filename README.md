@@ -1,32 +1,32 @@
 # Qwen3-TTS CUDA Graphs
 
-Real-time Qwen3-TTS inference using manual CUDA graph capture. No Flash Attention, no vLLM, no Triton. Just `torch.cuda.CUDAGraph`. **738 lines of Python.**
+Real-time Qwen3-TTS inference using manual CUDA graph capture. No Flash Attention, no vLLM, no Triton. Just `torch.cuda.CUDAGraph`. **1,038 lines of Python.** Supports both streaming and non-streaming generation.
 
 ## Results
 
-Benchmarks include tokenization + inference (apples-to-apples with baseline). RTF > 1.0 = faster than real-time.
+Benchmarks include tokenization + inference (apples-to-apples with baseline). RTF > 1.0 = faster than real-time. TTFA measured as time to first playable audio chunk using streaming (chunk_size=8, matching baseline's default `emit_every_frames=8`).
 
 ### 0.6B Model
 
 | GPU | Baseline RTF | Baseline TTFA | CUDA Graphs RTF | CUDA Graphs TTFA | Speedup |
 |---|---|---|---|---|---|
-| Jetson AGX Orin 64GB | 0.175 | 2,572ms | 1.38 | 216ms | 7.9x |
-| DGX Spark (GB10) | 1.19 | 631ms | 1.44 | 113ms | 1.2x / 5.6x |
-| RTX 4090 | 1.34 | 462ms | **4.56** | **55ms** | 3.4x / 8.4x |
-| H100 80GB HBM3 | 0.59 | 1,049ms | **3.47** | **100ms** | 5.9x / 10.5x |
+| Jetson AGX Orin 64GB | 0.175 | 2,572ms | 1.38 | 555ms | 7.9x / 4.6x |
+| DGX Spark (GB10) | 1.19 | 631ms | 1.44 | — | — |
+| RTX 4090 | 1.34 | 462ms | **4.56** | — | — |
+| H100 80GB HBM3 | 0.59 | 1,049ms | **3.47** | — | — |
 
 ### 1.7B Model
 
 | GPU | Baseline RTF | Baseline TTFA | CUDA Graphs RTF | CUDA Graphs TTFA | Speedup |
 |---|---|---|---|---|---|
-| Jetson AGX Orin 64GB | 0.130 | 2,594ms | 1.13 | 237ms | 8.7x |
-| DGX Spark (GB10) | 0.975 | 749ms | 1.16 | 196ms | 1.2x / 3.8x |
-| RTX 4090 | 1.32 | 468ms | **4.06** | **58ms** | 3.1x / 8.1x |
-| H100 80GB HBM3 | 0.59 | 1,045ms | **3.30** | **104ms** | 5.6x / 10.0x |
+| Jetson AGX Orin 64GB | 0.130 | 2,594ms | 1.13 | — | — |
+| DGX Spark (GB10) | 0.975 | 749ms | 1.16 | — | — |
+| RTX 4090 | 1.32 | 468ms | **4.06** | — | — |
+| H100 80GB HBM3 | 0.59 | 1,045ms | **3.30** | — | — |
 
-**Note:** Baseline uses standard qwen-tts. CUDA graphs uses `Qwen3TTSCudaGraphs` wrapper with voice prompt caching. Both include text tokenization overhead for fair comparison. Speedup shows throughput improvement / TTFA improvement (e.g., "3.4x / 8.4x" = 3.4x faster generation, 8.4x lower latency).
+**Note:** Baseline uses standard qwen-tts with `stream_generate_voice_clone()` (default `emit_every_frames=8`). CUDA graphs uses `generate_voice_clone_streaming(chunk_size=8)` for TTFA. Both measure time to first playable audio chunk and include text tokenization for fair comparison. Speedup shows throughput / TTFA improvement.
 
-**GPU architecture notes:** RTX 4090 (2.5 GHz clocks) outperforms H100 (1.8 GHz) for single-stream workloads. H100's lower baseline (RTF 0.59 vs 4090's 1.34) reflects design optimization for batch processing rather than single-stream inference. CUDA graphs help both, but 4090 maintains the lead with sub-60ms latency.
+**GPU architecture notes:** RTX 4090 (2.5 GHz clocks) outperforms H100 (1.8 GHz) for single-stream workloads. H100's lower baseline (RTF 0.59 vs 4090's 1.34) reflects design optimization for batch processing rather than single-stream inference.
 
 ## Quick Start
 
@@ -73,6 +73,47 @@ CUDA graphs capture the entire decode step and replay it as a single GPU operati
 | Overhead | 65ms | 16ms |
 | **Total per step** | **330ms** | **54ms** |
 
+## Streaming
+
+CUDA graphs support streaming output — audio chunks are yielded during generation with the same per-step performance as non-streaming mode.
+
+### Chunk size vs performance (Jetson AGX Orin, 0.6B)
+
+| chunk_size | TTFA | RTF | Audio per chunk |
+|---|---|---|---|
+| 4 | 355ms | 1.11 | 333ms |
+| 8 | 555ms | 1.22 | 667ms |
+| 12 | 760ms | 1.26 | 1000ms |
+| Non-streaming | — | 1.36 | all at once |
+
+Smaller chunks = lower latency but more decode overhead. `chunk_size=4` is the smallest that stays real-time on Jetson.
+
+### Usage
+
+```python
+from qwen3_tts_cuda_graphs import Qwen3TTSCudaGraphs
+
+model = Qwen3TTSCudaGraphs.from_pretrained("models/Qwen3-TTS-12Hz-0.6B-Base")
+
+# Streaming — yields audio chunks during generation
+for audio_chunk, sr, timing in model.generate_voice_clone_streaming(
+    text="Hello world!", language="English",
+    ref_audio="ref.wav", ref_text="...",
+    chunk_size=8,  # 8 steps ≈ 667ms of audio per chunk
+):
+    play(audio_chunk, sr)  # process/send each chunk immediately
+
+# Non-streaming — returns all audio at once (unchanged API)
+audio_list, sr = model.generate_voice_clone(
+    text="Hello world!", language="English",
+    ref_audio="ref.wav", ref_text="...",
+)
+```
+
+### How it works
+
+The CUDA graphs are unchanged — both predictor and talker graphs are replayed per step. The streaming generator yields codec ID chunks every `chunk_size` steps, and the model wrapper decodes each chunk to audio using a sliding window with 25-frame left context (matching the upstream codec's `chunked_decode` pattern) to avoid boundary artifacts.
+
 ## Voice Cloning with Precomputed Speaker Embeddings
 
 For production use, extract the speaker embedding once and reuse it:
@@ -96,32 +137,34 @@ The speaker embedding is a 4KB file (2048-dim bf16 vector). In `x_vector_only` m
 
 | | nano-qwen3tts-vllm | Qwen3-TTS-streaming | **Ours** |
 |---|---|---|---|
-| Lines of code | 7,289 | ~3,000 | **738** |
+| Lines of code | 7,289 | ~3,000 | **1,038** |
 | Flash Attention required | Yes | No | **No** |
 | Triton/torch.compile required | No | Yes | **No** |
+| Streaming support | No | Yes | **Yes** |
 | Runs on Jetson | No | No | **Yes** |
 | RTF on H100 (1.7B) | 0.399 | N/A | **3.80** |
-| TTFA | 160ms (L4) | N/A | **36ms (4090)** |
 
-On the same H100 hardware: **~10x faster with ~10x less code** vs nano-qwen3tts-vllm.
+On the same H100 hardware: **~10x faster with ~7x less code** vs nano-qwen3tts-vllm.
 
 ## Files
 
 ```
 qwen3_tts_cuda_graphs/
-  model.py                      # Wrapper API (289 lines)
+  model.py                      # Wrapper API (404 lines)
+  fast_generate_v5.py           # Non-streaming generation loop (156 lines)
+  streaming.py                  # Streaming generation loop (178 lines)
   manual_cudagraph_predictor.py # Predictor graph with StaticCache (156 lines)
   manual_cudagraph_talker.py    # Talker graph with StaticCache (137 lines)
-  fast_generate_v5.py           # Full generation loop (156 lines)
 extract_speaker.py              # Extract speaker embedding from ref audio
 generate_xvec.py                # End-to-end generation with precomputed speaker
-bench_v5.py                     # Benchmark (throughput + TTFA + audio samples)
-bench_ttft.py                   # Detailed TTFA breakdown benchmark
+bench_v5.py                     # Benchmark (throughput + audio samples)
+bench_streaming.py              # Streaming benchmark (TTFA + chunk timing)
+bench_chunk_sweep.py            # Chunk size sweep (RTF vs latency tradeoff)
 benchmark.sh                    # Run benchmarks
 setup.sh                        # Setup venv + download models
 ```
 
-Core implementation: **738 lines** of Python.
+Core implementation: **1,038 lines** of Python.
 
 ## License
 
