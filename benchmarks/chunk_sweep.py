@@ -5,7 +5,7 @@ import time
 import os
 import numpy as np
 import soundfile as sf
-from qwen3_tts_cuda_graphs import Qwen3TTSCudaGraphs
+from faster_qwen3_tts import FasterQwen3TTS
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL_SIZE = os.environ.get('MODEL_SIZE', '0.6B')
@@ -15,7 +15,7 @@ ref_audio = os.path.join(PROJECT_DIR, 'ref_audio.wav')
 ref_text = "I'm confused why some people have super short timelines, yet at the same time are bullish on scaling up reinforcement learning atop LLMs. If we're actually close to a human-like learner, then this whole approach of training on verifiable outcomes."
 
 print("Loading model...")
-model = Qwen3TTSCudaGraphs.from_pretrained(
+model = FasterQwen3TTS.from_pretrained(
     MODEL_ID, device='cuda', dtype=torch.bfloat16,
     attn_implementation='eager', max_seq_len=2048,
 )

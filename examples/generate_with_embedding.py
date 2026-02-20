@@ -18,10 +18,7 @@ Usage:
 """
 import argparse
 import torch
-import time
 import sys
-import json
-import os
 
 sys.path.insert(0, '.')
 
@@ -45,75 +42,58 @@ def main():
     parser.add_argument("--output", default="output.wav", help="Output wav path")
     parser.add_argument("--model_path", default="Qwen/Qwen3-TTS-12Hz-1.7B-Base", help="Model path")
     parser.add_argument("--device", default="cuda:0", help="Device")
-    parser.add_argument("--max_seq", type=int, default=2048, help="Max sequence length for CUDA graph")
     args = parser.parse_args()
 
     import soundfile as sf
-    from qwen_tts import Qwen3TTSModel
-    from transformers import PretrainedConfig
-    from qwen3_tts_cuda_graphs.predictor_graph import PredictorGraph
-    from qwen3_tts_cuda_graphs.talker_graph import TalkerGraph
-    from qwen3_tts_cuda_graphs.generate import fast_generate
+    from faster_qwen3_tts import FasterQwen3TTS
+    from faster_qwen3_tts.generate import fast_generate
 
     print(f"Loading model from {args.model_path}...")
-    model = Qwen3TTSModel.from_pretrained(args.model_path, device_map=args.device, dtype=torch.bfloat16)
-    talker = model.model.talker
-    config = model.model.config.talker_config
-
-    config_path = args.model_path if os.path.isdir(args.model_path) else None
-    if config_path:
-        with open(f'{config_path}/config.json') as f:
-            fc = json.load(f)
-    else:
-        fc = model.model.config.to_dict()
-    pred_config = PretrainedConfig(**fc['talker_config']['code_predictor_config'])
-    talker_cfg = PretrainedConfig(**fc['talker_config'])
+    model = FasterQwen3TTS.from_pretrained(
+        args.model_path,
+        device="cuda",
+        dtype=torch.bfloat16,
+    )
 
     # Load precomputed speaker embedding
     print(f"Loading speaker embedding from {args.speaker}...")
     vcp = load_xvector_prompt(args.speaker, device=args.device)
 
     # Build inputs
-    input_texts = [f"<|im_start|>assistant\n{args.text}<|im_end|>\n<|im_start|>assistant\n"]
-    input_ids = []
-    for t in input_texts:
-        inp = model.processor(text=t, return_tensors="pt", padding=True)
-        iid = inp["input_ids"].to(model.device)
-        input_ids.append(iid.unsqueeze(0) if iid.dim() == 1 else iid)
+    input_texts = [model.model._build_assistant_text(args.text)]
+    input_ids = model.model._tokenize_texts(input_texts)
 
-    tie, tam, tth, tpe = model.model._build_talker_inputs(
-        input_ids=input_ids, instruct_ids=None, ref_ids=None,
-        voice_clone_prompt=vcp, languages=[args.language], speakers=None, non_streaming_mode=False,
+    tie, tam, tth, tpe = model._build_talker_inputs_local(
+        m=model.model.model,
+        input_ids=input_ids,
+        ref_ids=[None],
+        voice_clone_prompt=vcp,
+        languages=[args.language],
+        speakers=None,
+        non_streaming_mode=False,
     )
     prefill_len = tie.shape[1]
     print(f"Prefill length: {prefill_len} tokens")
 
-    # Build CUDA graphs
-    print("Building CUDA graphs...")
-    predictor = talker.code_predictor
-    mpg = PredictorGraph(predictor, pred_config, fc['talker_config']['hidden_size'])
-    mpg.capture(num_warmup=3)
-
-    mtg = TalkerGraph(talker.model, talker_cfg, max_seq_len=args.max_seq)
-    mtg.capture(prefill_len=prefill_len, num_warmup=3)
+    # Warmup + capture CUDA graphs (one-time)
+    model._warmup(prefill_len)
 
     # Warmup
+    talker = model.model.model.talker
+    config = model.model.model.config.talker_config
     talker.rope_deltas = None
     fast_generate(
-        talker, tie, tam, tth, tpe, config, mpg, mtg,
+        talker, tie, tam, tth, tpe, config, model.predictor_graph, model.talker_graph,
         temperature=0.9, top_k=50, do_sample=True, max_new_tokens=20,
     )
 
     # Generate
     print("Generating...")
     talker.rope_deltas = None
-    t0 = time.time()
     codec_ids, timing = fast_generate(
-        talker, tie, tam, tth, tpe, config, mpg, mtg,
+        talker, tie, tam, tth, tpe, config, model.predictor_graph, model.talker_graph,
         temperature=0.9, top_k=50, do_sample=True, max_new_tokens=2048,
     )
-    wall = time.time() - t0
-
     if codec_ids is not None and codec_ids.numel() > 0:
         wavs, sr = model.model.speech_tokenizer.decode([{"audio_codes": codec_ids.to(model.device)}])
         audio = wavs[0]

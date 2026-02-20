@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["qwen3_tts_cuda_graphs*"]
+include = ["faster_qwen3_tts*"]
 
 [project]
 name = "faster-qwen3-tts"

@@ -1,6 +1,6 @@
 # Faster Qwen3-TTS
 
-Real-time Qwen3-TTS inference using CUDA graph capture. No Flash Attention, no vLLM, no Triton. Just `torch.cuda.CUDAGraph`. **1,038 lines of Python.** Supports both streaming and non-streaming generation.
+Real-time Qwen3-TTS inference using CUDA graph capture. No Flash Attention, no vLLM, no Triton. Just `torch.cuda.CUDAGraph`. **1,351 lines of Python.** Supports both streaming and non-streaming generation.
 
 ## Results
 
@@ -95,9 +95,9 @@ Smaller chunks = lower latency but more decode overhead. `chunk_size=2` is the s
 ### Usage
 
 ```python
-from qwen3_tts_cuda_graphs import Qwen3TTSCudaGraphs
+from faster_qwen3_tts import FasterQwen3TTS
 
-model = Qwen3TTSCudaGraphs.from_pretrained("Qwen/Qwen3-TTS-12Hz-0.6B-Base")
+model = FasterQwen3TTS.from_pretrained("Qwen/Qwen3-TTS-12Hz-0.6B-Base")
 
 # Streaming — yields audio chunks during generation
 for audio_chunk, sr, timing in model.generate_voice_clone_streaming(
@@ -147,7 +147,7 @@ The speaker embedding is a 4KB file (2048-dim bf16 vector). In `x_vector_only` m
 
 | | nano-qwen3tts-vllm | Qwen3-TTS-streaming | **Ours** |
 |---|---|---|---|
-| Lines of code | 7,289 | ~3,000 | **1,038** |
+| Lines of code | 7,289 | ~3,000 | **1,351** |
 | Flash Attention required | Yes | No | **No** |
 | Triton/torch.compile required | No | Yes | **No** |
 | Streaming support | No | Yes | **Yes** |
@@ -159,12 +159,12 @@ On the same H100 hardware: **~10x faster with ~7x less code** vs nano-qwen3tts-v
 ## Files
 
 ```
-qwen3_tts_cuda_graphs/
-  model.py                        # Wrapper API (404 lines)
-  generate.py                     # Non-streaming generation loop (156 lines)
-  streaming.py                    # Streaming generation loop (178 lines)
-  predictor_graph.py              # Predictor CUDA graph with StaticCache (156 lines)
-  talker_graph.py                 # Talker CUDA graph with StaticCache (137 lines)
+faster_qwen3_tts/
+  model.py                        # Wrapper API (660 lines)
+  generate.py                     # Non-streaming generation loop (154 lines)
+  streaming.py                    # Streaming generation loop (180 lines)
+  predictor_graph.py              # Predictor CUDA graph with StaticCache (190 lines)
+  talker_graph.py                 # Talker CUDA graph with StaticCache (167 lines)
 examples/
   extract_speaker.py              # Extract speaker embedding from ref audio
   generate_with_embedding.py      # Generate with precomputed speaker embedding
@@ -177,7 +177,7 @@ benchmark.sh                      # Run benchmarks
 setup.sh                          # Setup venv + download models
 ```
 
-Core implementation: **1,038 lines** of Python.
+Core implementation: **1,351 lines** of Python.
 
 ## License
 
