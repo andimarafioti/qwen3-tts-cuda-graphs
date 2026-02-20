@@ -1,6 +1,6 @@
 # Qwen3-TTS: 5.6x Real-Time on an RTX 4090
 
-**TL;DR:** Qwen3-TTS is an incredible open-source model, but running it at production speeds requires bypassing the Python overhead. By combining transformers' `StaticCache` with `torch.cuda.CUDAGraph`, we unlocked RTF 5.6 on an RTX 4090 and RTF 4.2 on an H100 — with streaming support — all in just 1,038 lines of pure PyTorch, with zero custom attention code.
+**TL;DR:** Qwen3-TTS is an incredible open-source model, but running it at production speeds requires bypassing the Python overhead. By combining transformers' `StaticCache` with `torch.cuda.CUDAGraph`, we unlocked RTF 5.6 on an RTX 4090 and RTF 4.2 on an H100 — with streaming support — all in just 1,351 lines of pure PyTorch, with zero custom attention code.
 
 ## The Challenge: The "Reference Code" Gap
 
@@ -52,7 +52,7 @@ The two exceptions in our benchmarks are NVIDIA's **Jetson Thor** and **DGX Spar
 
 ## How We Did It (The "Magic")
 
-We didn't rewrite the model in C++ or use a complex serving engine like vLLM. We kept it entirely within the PyTorch/Hugging Face ecosystem, using just **1,038 lines of Python** (including streaming), and we didn't reimplement a single attention layer.
+We didn't rewrite the model in C++ or use a complex serving engine like vLLM. We kept it entirely within the PyTorch/Hugging Face ecosystem, using just **1,351 lines of Python** (including streaming), and we didn't reimplement a single attention layer.
 
 The key insight: transformers already ships everything you need. Its `StaticCache` class pre-allocates fixed-size KV tensors and updates them in-place via `index_copy_` — exactly what CUDA graphs require. Instead of reimplementing 28 layers of attention, RoPE, and GQA by hand, we just call the model's own forward pass with a `StaticCache` and a `cache_position` buffer, then wrap the whole thing in `torch.cuda.CUDAGraph`.
 
@@ -163,11 +163,11 @@ cd faster-qwen3-tts
 ```
 
 Core implementation:
-- `predictor_graph.py` (156 lines)
-- `talker_graph.py` (137 lines)
-- `generate.py` (156 lines) — non-streaming
-- `streaming.py` (178 lines) — streaming
-- `model.py` (404 lines) — wrapper API
+- `predictor_graph.py` (190 lines)
+- `talker_graph.py` (167 lines)
+- `generate.py` (154 lines) — non-streaming
+- `streaming.py` (180 lines) — streaming
+- `model.py` (660 lines) — wrapper API
 
 No Flash Attention. No Triton. No vLLM. No custom attention code. Just the model's own forward pass, `StaticCache`, and `CUDAGraph`.
 

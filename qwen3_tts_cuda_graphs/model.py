@@ -1,14 +1,14 @@
 """
 Qwen3TTSCudaGraphs: Real-time TTS using CUDA graph capture.
 
-Wrapper class that provides a qwen-tts compatible API while using
+Wrapper class that provides a Qwen3-TTS API while using
 CUDA graphs for 6-10x speedup.
 """
 import torch
 import numpy as np
 import soundfile as sf
 from pathlib import Path
-from typing import Generator, Optional, Tuple, Union
+from typing import Generator, Tuple, Union
 import logging
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ class Qwen3TTSCudaGraphs:
     """
     Qwen3-TTS model with CUDA graphs for real-time inference.
     
-    Compatible API with qwen-tts Qwen3TTSModel, but uses CUDA graph
+    Compatible API with Qwen3TTSModel, but uses CUDA graph
     capture for 6-10x speedup on NVIDIA GPUs.
     """
     
@@ -182,20 +182,8 @@ class Qwen3TTSCudaGraphs:
                 continuing the reference audio's last phoneme and allows natural language switching.
                 When False, the full reference audio codec tokens are included in context (ICL mode).
         """
-        # Use upstream formatting/tokenization if available
-        if hasattr(self.model, "_build_assistant_text"):
-            input_texts = [self.model._build_assistant_text(text)]
-        else:
-            input_texts = [f"<|im_start|>assistant\n{text}<|im_end|>\n<|im_start|>assistant\n"]
-
-        if hasattr(self.model, "_tokenize_texts"):
-            input_ids = self.model._tokenize_texts(input_texts)
-        else:
-            input_ids = []
-            for t in input_texts:
-                inp = self.model.processor(text=t, return_tensors="pt", padding=True)
-                iid = inp["input_ids"].to(self.model.device)
-                input_ids.append(iid.unsqueeze(0) if iid.dim() == 1 else iid)
+        input_texts = [self.model._build_assistant_text(text)]
+        input_ids = self.model._tokenize_texts(input_texts)
 
         cache_key = (str(ref_audio), ref_text, xvec_only)
         if cache_key in self._voice_prompt_cache:
@@ -226,16 +214,8 @@ class Qwen3TTSCudaGraphs:
             ref_ids = []
             rt = prompt_items[0].ref_text
             if rt:
-                if hasattr(self.model, "_build_ref_text"):
-                    ref_texts = [self.model._build_ref_text(rt)]
-                else:
-                    ref_texts = [f"<|im_start|>assistant\n{rt}<|im_end|>\n"]
-                if hasattr(self.model, "_tokenize_texts"):
-                    ref_ids.append(self.model._tokenize_texts(ref_texts)[0])
-                else:
-                    inp = self.model.processor(text=ref_texts[0], return_tensors="pt", padding=True)
-                    iid = inp["input_ids"].to(self.model.device)
-                    ref_ids.append(iid.unsqueeze(0) if iid.dim() == 1 else iid)
+                ref_texts = [self.model._build_ref_text(rt)]
+                ref_ids.append(self.model._tokenize_texts(ref_texts)[0])
             else:
                 ref_ids.append(None)
 
@@ -243,26 +223,15 @@ class Qwen3TTSCudaGraphs:
 
         m = self.model.model
 
-        if hasattr(m, "_build_talker_inputs"):
-            tie, tam, tth, tpe = m._build_talker_inputs(
-                input_ids=input_ids,
-                instruct_ids=None,
-                ref_ids=ref_ids,
-                voice_clone_prompt=vcp,
-                languages=[language] if language is not None else ["Auto"],
-                speakers=None,
-                non_streaming_mode=False,
-            )
-        else:
-            tie, tam, tth, tpe = self._build_talker_inputs_local(
-                m=m,
-                input_ids=input_ids,
-                ref_ids=ref_ids,
-                voice_clone_prompt=vcp,
-                languages=[language] if language is not None else ["Auto"],
-                speakers=None,
-                non_streaming_mode=False,
-            )
+        tie, tam, tth, tpe = self._build_talker_inputs_local(
+            m=m,
+            input_ids=input_ids,
+            ref_ids=ref_ids,
+            voice_clone_prompt=vcp,
+            languages=[language] if language is not None else ["Auto"],
+            speakers=None,
+            non_streaming_mode=False,
+        )
 
         if not self._warmed_up:
             self._warmup(tie.shape[1])
@@ -324,7 +293,7 @@ class Qwen3TTSCudaGraphs:
             if (
                 language.lower() in ["chinese", "auto"]
                 and speaker not in ("", None)
-                and m.config.talker_config.spk_is_dialect[speaker.lower()] != False
+                and m.config.talker_config.spk_is_dialect[speaker.lower()]
             ):
                 dialect = m.config.talker_config.spk_is_dialect[speaker.lower()]
                 language_id = m.config.talker_config.codec_language_id[dialect]

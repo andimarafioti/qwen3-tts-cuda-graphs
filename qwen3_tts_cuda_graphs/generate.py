@@ -40,7 +40,6 @@ def fast_generate(
             suppress_mask[i] = True
     
     predictor = talker.code_predictor
-    talker_model = talker.model
     talker_codec_embed = talker.get_input_embeddings()
     talker_codec_head = talker.codec_head
     predictor_codec_embeds = predictor.get_input_embeddings()

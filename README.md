@@ -1,6 +1,6 @@
 # Faster Qwen3-TTS
 
-Real-time Qwen3-TTS inference using CUDA graph capture. No Flash Attention, no vLLM, no Triton. Just `torch.cuda.CUDAGraph`. **1,038 lines of Python.** Supports both streaming and non-streaming generation.
+Real-time Qwen3-TTS inference using CUDA graph capture. No Flash Attention, no vLLM, no Triton. Just `torch.cuda.CUDAGraph`. **1,351 lines of Python.** Supports both streaming and non-streaming generation.
 
 ## Results
 
@@ -147,7 +147,7 @@ The speaker embedding is a 4KB file (2048-dim bf16 vector). In `x_vector_only` m
 
 | | nano-qwen3tts-vllm | Qwen3-TTS-streaming | **Ours** |
 |---|---|---|---|
-| Lines of code | 7,289 | ~3,000 | **1,038** |
+| Lines of code | 7,289 | ~3,000 | **1,351** |
 | Flash Attention required | Yes | No | **No** |
 | Triton/torch.compile required | No | Yes | **No** |
 | Streaming support | No | Yes | **Yes** |
@@ -177,7 +177,7 @@ benchmark.sh                      # Run benchmarks
 setup.sh                          # Setup venv + download models
 ```
 
-Core implementation: **1,038 lines** of Python.
+Core implementation: **1,351 lines** of Python.
 
 ## License
 
