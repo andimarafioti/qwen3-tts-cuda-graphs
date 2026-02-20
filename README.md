@@ -56,7 +56,7 @@ Requires: Python 3.10+, NVIDIA GPU with CUDA, [uv](https://docs.astral.sh/uv/).
 pip install faster-qwen3-tts
 ```
 
-Note: This pulls `qwen-tts` from the official GitHub repo because it is not published on PyPI yet.
+Note: This installs the `qwen-tts` PyPI package (`>=0.1.1`).
 
 Install from source:
 
@@ -225,29 +225,6 @@ The speaker embedding is a 4KB file (2048-dim bf16 vector). In `x_vector_only` m
 - **No accent bleed**: native pronunciation per language
 - **Shorter prefill**: 10 tokens vs ~80+ in full ICL clone mode
 - **No ref audio at runtime**: just the 4KB embedding file
-
-
-## Files
-
-```
-faster_qwen3_tts/
-  model.py                        # Wrapper API
-  generate.py                     # Non-streaming generation loop
-  streaming.py                    # Streaming generation loop
-  predictor_graph.py              # Predictor CUDA graph with StaticCache
-  talker_graph.py                 # Talker CUDA graph with StaticCache
-examples/
-  extract_speaker.py              # Extract speaker embedding from ref audio
-  generate_with_embedding.py      # Generate with precomputed speaker embedding
-benchmarks/
-  throughput.py                   # Throughput benchmark (RTF + audio samples)
-  streaming.py                    # Streaming benchmark (TTFA + chunk timing)
-  chunk_sweep.py                  # Chunk size sweep (RTF vs latency tradeoff)
-  baseline.py                     # Baseline qwen-tts benchmark
-  custom_voice.py                 # CustomVoice benchmark
-benchmark.sh                      # Run benchmarks
-setup.sh                          # Setup venv + download models
-```
 
 ## License
 
