@@ -20,7 +20,7 @@ $PY -c "import torch; assert torch.cuda.is_available()" 2>/dev/null || {
 }
 
 GPU_NAME=$($PY -c 'import torch; print(torch.cuda.get_device_name(0))')
-echo "=== Qwen3-TTS CUDA Graph Benchmark ==="
+echo "=== Faster Qwen3-TTS Benchmark ==="
 echo "GPU: $GPU_NAME"
 echo "PyTorch: $($PY -c 'import torch; print(torch.__version__)')"
 echo "CUDA: $($PY -c 'import torch; print(torch.version.cuda)')"

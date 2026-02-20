@@ -121,11 +121,11 @@ This is now applied automatically in `_prepare_generation()` before the referenc
 
 We've open-sourced this implementation to help the community deploy Qwen3-TTS in production environments:
 
-**[github.com/andimarafioti/qwen3-tts-cuda-graphs](https://github.com/andimarafioti/qwen3-tts-cuda-graphs)**
+**[github.com/andimarafioti/faster-qwen3-tts](https://github.com/andimarafioti/faster-qwen3-tts)**
 
 ```bash
-git clone https://github.com/andimarafioti/qwen3-tts-cuda-graphs
-cd qwen3-tts-cuda-graphs
+git clone https://github.com/andimarafioti/faster-qwen3-tts
+cd faster-qwen3-tts
 ./setup.sh       # creates venv with uv, installs deps, downloads models
 ./benchmark.sh   # runs full benchmark, saves JSON + audio samples
 ```

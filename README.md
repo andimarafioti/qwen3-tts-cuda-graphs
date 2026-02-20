@@ -1,4 +1,4 @@
-# Qwen3-TTS CUDA Graphs
+# Faster Qwen3-TTS
 
 Real-time Qwen3-TTS inference using CUDA graph capture. No Flash Attention, no vLLM, no Triton. Just `torch.cuda.CUDAGraph`. **1,038 lines of Python.** Supports both streaming and non-streaming generation.
 
@@ -26,15 +26,15 @@ Benchmarks include tokenization + inference (apples-to-apples with baseline). RT
 | RTX 4090 | 1.32 | 468ms | **4.06** | **186ms** | 3.1x / 2.5x |
 | H100 80GB HBM3 | 0.59 | 1,045ms | **3.30** | **245ms** | 5.6x / 4.3x |
 
-**Note:** Baseline uses standard qwen-tts with `stream_generate_voice_clone()` (default `emit_every_frames=8`). CUDA graphs uses `generate_voice_clone_streaming(chunk_size=8)` for TTFA. Both measure time to first playable audio chunk and include text tokenization for fair comparison. Speedup shows throughput / TTFA improvement.
+**Note:** Baseline uses standard qwen-tts. If streaming output is unavailable in the upstream package, TTFA is reported as **time-to-full-audio** (no streaming). CUDA graphs uses `generate_voice_clone_streaming(chunk_size=8)` for TTFA. Both include text tokenization for fair comparison. Speedup shows throughput / TTFA improvement.
 
 **GPU architecture notes:** RTX 4090 (2.5 GHz clocks) outperforms H100 (1.8 GHz) for single-stream workloads. H100's lower baseline (RTF 0.59 vs 4090's 1.34) reflects design optimization for batch processing rather than single-stream inference.
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/andimarafioti/qwen3-tts-cuda-graphs
-cd qwen3-tts-cuda-graphs
+git clone https://github.com/andimarafioti/faster-qwen3-tts
+cd faster-qwen3-tts
 ./setup.sh       # creates venv with uv, installs deps, downloads models
 ./benchmark.sh   # runs full benchmark, saves JSON + audio samples
 ```
@@ -184,5 +184,6 @@ MIT
 ## Acknowledgments
 
 - [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) by the Qwen team
+- [Qwen3-TTS-streaming](https://github.com/dffdeeq/Qwen3-TTS-streaming) for ideas and code we adapted for streaming
 - [nano-qwen3tts-vllm](https://github.com/tsdocode/nano-qwen3tts-vllm) for inspiration on CUDA graph usage
 - NVIDIA for providing the Jetson AGX Orin board

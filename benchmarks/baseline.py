@@ -27,22 +27,37 @@ for _ in range(3):
     _ = model.generate_voice_clone(text=text, voice_clone_prompt=voice_clone_prompt, max_new_tokens=20)
     torch.cuda.synchronize()
 
-# TTFA (streaming)
-print("\nTTFA (5 runs, streaming)...", flush=True)
-ttfa_times = []
-for i in range(5):
-    torch.cuda.synchronize()
-    t0 = time.perf_counter()
-    gen = model.stream_generate_voice_clone(text=text, voice_clone_prompt=voice_clone_prompt)
-    try:
-        chunk, sr = next(gen)
-    finally:
-        gen.close()
-    ttfa = (time.perf_counter() - t0) * 1000
-    ttfa_times.append(ttfa)
-    print(f"  Run {i+1}: {ttfa:.0f}ms", flush=True)
-    torch.cuda.synchronize()
-print(f"  TTFA: {np.mean(ttfa_times):.0f}ms")
+# TTFA (streaming if available)
+stream_fn = getattr(model, "stream_generate_voice_clone", None)
+if callable(stream_fn):
+    print("\nTTFA (5 runs, streaming)...", flush=True)
+    ttfa_times = []
+    for i in range(5):
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        gen = stream_fn(text=text, voice_clone_prompt=voice_clone_prompt)
+        try:
+            chunk, sr = next(gen)
+        finally:
+            gen.close()
+        ttfa = (time.perf_counter() - t0) * 1000
+        ttfa_times.append(ttfa)
+        print(f"  Run {i+1}: {ttfa:.0f}ms", flush=True)
+        torch.cuda.synchronize()
+    print(f"  TTFA: {np.mean(ttfa_times):.0f}ms")
+else:
+    print("\nTTFA (streaming not available in stock qwen-tts)", flush=True)
+    print("  Measuring time-to-full-audio instead.", flush=True)
+    ttfa_times = []
+    for i in range(5):
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        wav, sr = model.generate_voice_clone(text=text, voice_clone_prompt=voice_clone_prompt, max_new_tokens=512)
+        torch.cuda.synchronize()
+        ttfa = (time.perf_counter() - t0) * 1000
+        ttfa_times.append(ttfa)
+        print(f"  Run {i+1}: {ttfa:.0f}ms", flush=True)
+    print(f"  TTFA (full audio): {np.mean(ttfa_times):.0f}ms")
 
 # Throughput (3 runs)
 print("\nThroughput (3 runs)...", flush=True)

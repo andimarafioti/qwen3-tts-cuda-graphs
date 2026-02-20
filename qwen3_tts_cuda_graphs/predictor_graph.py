@@ -15,6 +15,7 @@ Strategy:
 """
 import torch
 from transformers import StaticCache
+from transformers.masking_utils import create_causal_mask, create_sliding_window_causal_mask
 
 
 class PredictorGraph:
@@ -43,6 +44,7 @@ class PredictorGraph:
         self.pred_model = cp.model  # Inner transformer model (5 layers)
         self.lm_heads = cp.lm_head  # ModuleList[15]
         self.codec_embeds = cp.model.codec_embedding  # ModuleList[15]
+        self.has_sliding_layers = "sliding_attention" in getattr(self.pred_model.config, "layer_types", [])
 
         # Transformers StaticCache for the predictor
         self.static_cache = StaticCache(config=pred_config, max_cache_len=self.max_seq)
@@ -59,6 +61,8 @@ class PredictorGraph:
 
         self.graph = None
         self.captured = False
+        self.prefill_attn = None
+        self.decode_attn = None
 
     def _init_cache_layers(self):
         """Force lazy initialization of StaticCache layers before graph capture."""
@@ -70,6 +74,33 @@ class PredictorGraph:
             if not layer.is_initialized:
                 layer.lazy_initialization(dummy_k)
 
+    def _make_attn_mask(self, input_embeds: torch.Tensor, cache_position: torch.Tensor):
+        mask = create_causal_mask(
+            config=self.pred_model.config,
+            input_embeds=input_embeds,
+            attention_mask=None,
+            cache_position=cache_position,
+            past_key_values=self.static_cache,
+        )
+        if self.has_sliding_layers:
+            sliding = create_sliding_window_causal_mask(
+                config=self.pred_model.config,
+                input_embeds=input_embeds,
+                attention_mask=None,
+                cache_position=cache_position,
+                past_key_values=self.static_cache,
+            )
+            return {"full_attention": mask, "sliding_attention": sliding}
+        return {"full_attention": mask}
+
+    def _build_attention_masks(self):
+        dummy_prefill = torch.zeros(1, 2, self.hidden_size, dtype=self.dtype, device=self.device)
+        dummy_decode = torch.zeros(1, 1, self.hidden_size, dtype=self.dtype, device=self.device)
+        self.prefill_attn = self._make_attn_mask(dummy_prefill, self.prefill_cache_pos)
+        self.decode_attn = []
+        for pos in self.decode_cache_positions:
+            self.decode_attn.append(self._make_attn_mask(dummy_decode, pos))
+
     def _full_loop(self):
         """The full 15-step predictor loop on static buffers."""
         # Project input from talker hidden size to predictor hidden size
@@ -78,6 +109,7 @@ class PredictorGraph:
         # Prefill: 2 tokens through all layers
         out = self.pred_model(
             inputs_embeds=h,
+            attention_mask=self.prefill_attn,
             past_key_values=self.static_cache,
             cache_position=self.prefill_cache_pos,
             use_cache=True,
@@ -98,6 +130,7 @@ class PredictorGraph:
             # Single-token decode through all layers
             out = self.pred_model(
                 inputs_embeds=emb,
+                attention_mask=self.decode_attn[cb_idx - 1],
                 past_key_values=self.static_cache,
                 cache_position=self.decode_cache_positions[cb_idx - 1],
                 use_cache=True,
@@ -117,6 +150,7 @@ class PredictorGraph:
 
         # Force cache initialization before graph capture
         self._init_cache_layers()
+        self._build_attention_masks()
 
         for _ in range(num_warmup):
             self.static_cache.reset()

@@ -15,6 +15,7 @@ Strategy:
 """
 import torch
 from transformers import StaticCache
+from transformers.masking_utils import create_causal_mask, create_sliding_window_causal_mask
 
 
 class TalkerGraph:
@@ -46,6 +47,8 @@ class TalkerGraph:
 
         self.graph = None
         self.captured = False
+        self.attn_mask = None
+        self.attn_mask_table = None
 
     def _init_cache_layers(self):
         """Force lazy initialization of StaticCache layers before graph capture."""
@@ -57,10 +60,34 @@ class TalkerGraph:
             if not layer.is_initialized:
                 layer.lazy_initialization(dummy_k)
 
+    def _build_attention_masks(self):
+        dummy = torch.zeros(1, 1, self.hidden_size, dtype=self.dtype, device=self.device)
+        max_len = self.max_seq_len
+        self.attn_mask_table = [None] * max_len
+
+        mask_fn = create_causal_mask if self.model.config.sliding_window is None else create_sliding_window_causal_mask
+
+        for i in range(max_len):
+            pos = torch.tensor([i], device=self.device)
+            full = mask_fn(
+                config=self.model.config,
+                input_embeds=dummy,
+                attention_mask=None,
+                cache_position=pos,
+                past_key_values=self.static_cache,
+            )
+            self.attn_mask_table[i] = full
+
+        self.attn_mask = self.attn_mask_table[0].clone()
+
+    def _set_attention_mask(self, position: int):
+        self.attn_mask.copy_(self.attn_mask_table[position])
+
     def _decode_step(self):
         """Single-token decode through the model's forward."""
         out = self.model(
             inputs_embeds=self.input_buf,
+            attention_mask=self.attn_mask,
             past_key_values=self.static_cache,
             cache_position=self.cache_position,
             use_cache=True,
@@ -77,9 +104,11 @@ class TalkerGraph:
 
         # Force cache initialization before graph capture
         self._init_cache_layers()
+        self._build_attention_masks()
 
         # Set cache_position for warmup
         self.cache_position[0] = prefill_len
+        self._set_attention_mask(prefill_len)
 
         for _ in range(num_warmup):
             self._decode_step()
@@ -131,6 +160,7 @@ class TalkerGraph:
         """
         self.input_buf.copy_(input_embeds)
         self.cache_position[0] = position
+        self._set_attention_mask(position)
 
         self.graph.replay()
 
