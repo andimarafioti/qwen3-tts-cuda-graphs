@@ -6,15 +6,6 @@ Real-time Qwen3-TTS inference using CUDA graph capture. No Flash Attention, no v
 
 Benchmarks include tokenization + inference (apples-to-apples with baseline). RTF > 1.0 = faster than real-time. TTFA measured as time to first playable audio chunk using streaming (chunk_size=8).
 
-### CustomVoice Models
-
-CustomVoice uses predefined speaker IDs (no reference audio). These benchmarks use the first available speaker ID from the model.
-
-| Model | CUDA Graphs RTF | CUDA Graphs TTFA |
-|---|---|---|
-| 0.6B CustomVoice | **5.53** | **154ms** |
-| 1.7B CustomVoice | **4.78** | **171ms** |
-
 ### 0.6B Model
 
 | GPU | Baseline RTF | Baseline TTFA | CUDA Graphs RTF | CUDA Graphs TTFA | Speedup |
