@@ -1,6 +1,6 @@
 # Qwen3-TTS: 5.6x Real-Time on an RTX 4090
 
-**TL;DR:** Qwen3-TTS is an incredible open-source model, but running it at production speeds requires bypassing the Python overhead. By combining transformers' `StaticCache` with `torch.cuda.CUDAGraph`, we unlocked RTF 5.6 on an RTX 4090 and RTF 4.2 on an H100 — with streaming support — all in just 1,351 lines of pure PyTorch, with zero custom attention code.
+**TL;DR:** Qwen3-TTS is an incredible open-source model, but running it at production speeds requires bypassing the Python overhead. By combining transformers' `StaticCache` with `torch.cuda.CUDAGraph`, we unlocked RTF 5.6 on an RTX 4090 and RTF 4.2 on an H100 — with streaming support — with zero custom attention code.
 
 ## The Challenge: The "Reference Code" Gap
 
@@ -19,6 +19,15 @@ We solved this using PyTorch CUDA Graphs. This allows us to "record" the GPU ope
 ## Results: Validating the "97ms" Promise
 
 Our optimized implementation not only matched the Qwen team's latency claims but often exceeded them, proving how efficient this architecture truly is.
+
+### CustomVoice Models (RTX 4090)
+
+CustomVoice uses predefined speaker IDs (no reference audio). These benchmarks use the first available speaker ID from the model.
+
+| Model | CUDA Graphs RTF | CUDA Graphs TTFA |
+|---|---|---|
+| 0.6B CustomVoice | **5.53** | **154ms** |
+| 1.7B CustomVoice | **4.78** | **171ms** |
 
 ### 0.6B Model
 
@@ -52,7 +61,7 @@ The two exceptions in our benchmarks are NVIDIA's **Jetson Thor** and **DGX Spar
 
 ## How We Did It (The "Magic")
 
-We didn't rewrite the model in C++ or use a complex serving engine like vLLM. We kept it entirely within the PyTorch/Hugging Face ecosystem, using just **1,351 lines of Python** (including streaming), and we didn't reimplement a single attention layer.
+We didn't rewrite the model in C++ or use a complex serving engine like vLLM. We kept it entirely within the PyTorch/Hugging Face ecosystem, and we didn't reimplement a single attention layer.
 
 The key insight: transformers already ships everything you need. Its `StaticCache` class pre-allocates fixed-size KV tensors and updates them in-place via `index_copy_` — exactly what CUDA graphs require. Instead of reimplementing 28 layers of attention, RoPE, and GQA by hand, we just call the model's own forward pass with a `StaticCache` and a `cache_position` buffer, then wrap the whole thing in `torch.cuda.CUDAGraph`.
 
@@ -163,11 +172,11 @@ cd faster-qwen3-tts
 ```
 
 Core implementation:
-- `predictor_graph.py` (190 lines)
-- `talker_graph.py` (167 lines)
-- `generate.py` (154 lines) — non-streaming
-- `streaming.py` (180 lines) — streaming
-- `model.py` (660 lines) — wrapper API
+- `predictor_graph.py` — predictor CUDA graph
+- `talker_graph.py` — talker CUDA graph
+- `generate.py` — non-streaming generation
+- `streaming.py` — streaming generation
+- `model.py` — wrapper API
 
 No Flash Attention. No Triton. No vLLM. No custom attention code. Just the model's own forward pass, `StaticCache`, and `CUDAGraph`.
 
@@ -178,8 +187,8 @@ Before CUDA graphs, we systematically tried everything else:
 - **Attention backends** (eager, SDPA, Flash Attention 2): all identical RTF. Attention is not the bottleneck.
 - **Custom CUDA kernels** (fused RMSNorm 8.4x faster, fused SiLU 2.2x): only 1.25x end-to-end. These ops are ~4% of compute.
 - **torch.compile**: we patched three Triton incompatibilities to get it working on Jetson for the first time. Zero speedup — dynamic KV-cache shapes defeat the compiler.
-- **Porting nano-qwen3tts-vllm** (7,289 lines): KV cache block allocator breaks on Jetson's unified memory.
-- **Manual attention reimplementation** (previous version of this repo): 758 lines with hand-rolled RoPE, GQA, and KV cache. Worked, but unnecessary — `StaticCache` already does all of this inside the model's own forward pass.
+- **Porting nano-qwen3tts-vllm**: KV cache block allocator breaks on Jetson's unified memory.
+- **Manual attention reimplementation** (previous version of this repo): hand-rolled RoPE, GQA, and KV cache. Worked, but unnecessary — `StaticCache` already does all of this inside the model's own forward pass.
 
 ## Conclusion
 

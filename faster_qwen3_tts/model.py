@@ -4,14 +4,19 @@ FasterQwen3TTS: Real-time TTS using CUDA graph capture.
 Wrapper class that provides a Qwen3-TTS API while using
 CUDA graphs for 6-10x speedup.
 """
-import torch
+import logging
+from pathlib import Path
+from typing import Generator, Optional, Tuple, Union
+
 import numpy as np
 import soundfile as sf
-from pathlib import Path
-from typing import Generator, Tuple, Union
-import logging
+import torch
+
+from .utils import suppress_flash_attn_warning
 
 logger = logging.getLogger(__name__)
+
+
 
 
 class FasterQwen3TTS:
@@ -71,8 +76,9 @@ class FasterQwen3TTS:
         
         logger.info(f"Loading Qwen3-TTS model: {model_name}")
         
-        # Import here to avoid dependency issues
-        from qwen_tts import Qwen3TTSModel
+        # Import here to avoid dependency issues (and suppress flash-attn warning)
+        with suppress_flash_attn_warning():
+            from qwen_tts import Qwen3TTSModel
         from .predictor_graph import PredictorGraph
         from .talker_graph import TalkerGraph
         # Load base model using qwen-tts library
@@ -242,6 +248,43 @@ class FasterQwen3TTS:
 
         return m, talker, config, tie, tam, tth, tpe
 
+    def _prepare_generation_custom(
+        self,
+        text: str,
+        language: str,
+        speaker: Optional[str],
+        instruct: Optional[str] = None,
+    ):
+        input_texts = [self.model._build_assistant_text(text)]
+        input_ids = self.model._tokenize_texts(input_texts)
+
+        instruct_ids = []
+        if instruct is None or instruct == "":
+            instruct_ids.append(None)
+        else:
+            instruct_ids.append(self.model._tokenize_texts([self.model._build_instruct_text(instruct)])[0])
+
+        m = self.model.model
+        tie, tam, tth, tpe = self._build_talker_inputs_local(
+            m=m,
+            input_ids=input_ids,
+            ref_ids=[None],
+            voice_clone_prompt=None,
+            languages=[language] if language is not None else ["Auto"],
+            speakers=[speaker],
+            non_streaming_mode=False,
+            instruct_ids=instruct_ids,
+        )
+
+        if not self._warmed_up:
+            self._warmup(tie.shape[1])
+
+        talker = m.talker
+        config = m.config.talker_config
+        talker.rope_deltas = None
+
+        return m, talker, config, tie, tam, tth, tpe
+
     def _build_talker_inputs_local(
         self,
         m,
@@ -251,6 +294,7 @@ class FasterQwen3TTS:
         languages,
         speakers,
         non_streaming_mode: bool,
+        instruct_ids=None,
     ):
         """Local copy of upstream talker input building for qwen-tts main repo."""
         talker_input_embeds = [[] for _ in range(len(input_ids))]
@@ -258,6 +302,13 @@ class FasterQwen3TTS:
         voice_clone_spk_embeds = None
         if voice_clone_prompt is not None:
             voice_clone_spk_embeds = m.generate_speaker_prompt(voice_clone_prompt)
+
+        if instruct_ids is not None:
+            for index, instruct_id in enumerate(instruct_ids):
+                if instruct_id is not None:
+                    talker_input_embeds[index].append(
+                        m.talker.text_projection(m.talker.get_text_embeddings()(instruct_id))
+                    )
 
         if speakers is None:
             speakers = [None] * len(input_ids)
@@ -650,6 +701,330 @@ class FasterQwen3TTS:
                     audio = audio.flatten().cpu().numpy()
                 else:
                     audio = audio.flatten() if hasattr(audio, 'flatten') else audio
+
+                if n_ctx > 0:
+                    ctx_samples = int(round(n_ctx * samples_per_frame))
+                    new_audio = audio[ctx_samples:]
+                else:
+                    new_audio = audio
+
+            yield new_audio, sr, timing
+
+    @torch.inference_mode()
+    def generate_custom_voice(
+        self,
+        text: str,
+        speaker: str,
+        language: str,
+        instruct: Optional[str] = None,
+        max_new_tokens: int = 2048,
+        temperature: float = 0.9,
+        top_k: int = 50,
+        do_sample: bool = True,
+        repetition_penalty: float = 1.05,
+    ) -> Tuple[list, int]:
+        if self.model.model.tts_model_type != "custom_voice":
+            raise ValueError("Loaded model does not support custom voice generation")
+
+        self.model._validate_languages([language])
+        self.model._validate_speakers([speaker])
+
+        if self.model.model.tts_model_size in "0b6":
+            instruct = None
+
+        from .generate import fast_generate
+
+        m, talker, config, tie, tam, tth, tpe = self._prepare_generation_custom(
+            text=text,
+            language=language,
+            speaker=speaker,
+            instruct=instruct,
+        )
+
+        codec_ids, timing = fast_generate(
+            talker=talker,
+            talker_input_embeds=tie,
+            attention_mask=tam,
+            trailing_text_hiddens=tth,
+            tts_pad_embed=tpe,
+            config=config,
+            predictor_graph=self.predictor_graph,
+            talker_graph=self.talker_graph,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_k=top_k,
+            do_sample=do_sample,
+            repetition_penalty=repetition_penalty,
+        )
+
+        if codec_ids is None:
+            logger.warning("Generation returned no tokens")
+            return [np.zeros(1, dtype=np.float32)], self.sample_rate
+
+        speech_tokenizer = m.speech_tokenizer
+        audio_list, sr = speech_tokenizer.decode({"audio_codes": codec_ids.unsqueeze(0)})
+
+        audio_arrays = []
+        for a in audio_list:
+            if hasattr(a, "cpu"):
+                audio_arrays.append(a.flatten().cpu().numpy())
+            else:
+                audio_arrays.append(a.flatten() if hasattr(a, "flatten") else a)
+
+        n_steps = timing["steps"]
+        audio_duration = n_steps / 12.0
+        total_time = timing["prefill_ms"] / 1000 + timing["decode_s"]
+        rtf = audio_duration / total_time if total_time > 0 else 0
+
+        logger.info(
+            f"Generated {audio_duration:.2f}s audio in {total_time:.2f}s "
+            f"({timing['ms_per_step']:.1f}ms/step, RTF: {rtf:.2f})"
+        )
+
+        return audio_arrays, sr
+
+    @torch.inference_mode()
+    def generate_custom_voice_streaming(
+        self,
+        text: str,
+        speaker: str,
+        language: str,
+        instruct: Optional[str] = None,
+        max_new_tokens: int = 2048,
+        temperature: float = 0.9,
+        top_k: int = 50,
+        do_sample: bool = True,
+        repetition_penalty: float = 1.05,
+        chunk_size: int = 12,
+    ) -> Generator[Tuple[np.ndarray, int, dict], None, None]:
+        if self.model.model.tts_model_type != "custom_voice":
+            raise ValueError("Loaded model does not support custom voice generation")
+
+        self.model._validate_languages([language])
+        self.model._validate_speakers([speaker])
+
+        if self.model.model.tts_model_size in "0b6":
+            instruct = None
+
+        from .streaming import fast_generate_streaming
+
+        m, talker, config, tie, tam, tth, tpe = self._prepare_generation_custom(
+            text=text,
+            language=language,
+            speaker=speaker,
+            instruct=instruct,
+        )
+
+        speech_tokenizer = m.speech_tokenizer
+
+        context_frames = 25
+        min_calibration_frames = max(context_frames, chunk_size)
+        all_codes = []
+        prev_audio_len = 0
+        samples_per_frame = None
+
+        for codec_chunk, timing in fast_generate_streaming(
+            talker=talker,
+            talker_input_embeds=tie,
+            attention_mask=tam,
+            trailing_text_hiddens=tth,
+            tts_pad_embed=tpe,
+            config=config,
+            predictor_graph=self.predictor_graph,
+            talker_graph=self.talker_graph,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_k=top_k,
+            do_sample=do_sample,
+            repetition_penalty=repetition_penalty,
+            chunk_size=chunk_size,
+        ):
+            all_codes.append(codec_chunk)
+            n_new = codec_chunk.shape[0]
+            all_flat = torch.cat(all_codes, dim=0)
+            n_total = all_flat.shape[0]
+
+            if samples_per_frame is None:
+                audio_list, sr = speech_tokenizer.decode({"audio_codes": all_flat.unsqueeze(0)})
+                audio = audio_list[0]
+                if hasattr(audio, "cpu"):
+                    audio = audio.flatten().cpu().numpy()
+                else:
+                    audio = audio.flatten() if hasattr(audio, "flatten") else audio
+
+                new_audio = audio[prev_audio_len:]
+                prev_audio_len = len(audio)
+
+                if n_total >= min_calibration_frames:
+                    samples_per_frame = len(audio) / n_total
+            else:
+                ctx_start = max(0, n_total - n_new - context_frames)
+                window = all_flat[ctx_start:]
+                n_ctx = window.shape[0] - n_new
+
+                audio_list, sr = speech_tokenizer.decode({"audio_codes": window.unsqueeze(0)})
+                audio = audio_list[0]
+                if hasattr(audio, "cpu"):
+                    audio = audio.flatten().cpu().numpy()
+                else:
+                    audio = audio.flatten() if hasattr(audio, "flatten") else audio
+
+                if n_ctx > 0:
+                    ctx_samples = int(round(n_ctx * samples_per_frame))
+                    new_audio = audio[ctx_samples:]
+                else:
+                    new_audio = audio
+
+            yield new_audio, sr, timing
+
+    @torch.inference_mode()
+    def generate_voice_design(
+        self,
+        text: str,
+        instruct: str,
+        language: str,
+        max_new_tokens: int = 2048,
+        temperature: float = 0.9,
+        top_k: int = 50,
+        do_sample: bool = True,
+        repetition_penalty: float = 1.05,
+    ) -> Tuple[list, int]:
+        if self.model.model.tts_model_type != "voice_design":
+            raise ValueError("Loaded model does not support voice design generation")
+
+        self.model._validate_languages([language])
+
+        from .generate import fast_generate
+
+        m, talker, config, tie, tam, tth, tpe = self._prepare_generation_custom(
+            text=text,
+            language=language,
+            speaker=None,
+            instruct=instruct,
+        )
+
+        codec_ids, timing = fast_generate(
+            talker=talker,
+            talker_input_embeds=tie,
+            attention_mask=tam,
+            trailing_text_hiddens=tth,
+            tts_pad_embed=tpe,
+            config=config,
+            predictor_graph=self.predictor_graph,
+            talker_graph=self.talker_graph,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_k=top_k,
+            do_sample=do_sample,
+            repetition_penalty=repetition_penalty,
+        )
+
+        if codec_ids is None:
+            logger.warning("Generation returned no tokens")
+            return [np.zeros(1, dtype=np.float32)], self.sample_rate
+
+        speech_tokenizer = m.speech_tokenizer
+        audio_list, sr = speech_tokenizer.decode({"audio_codes": codec_ids.unsqueeze(0)})
+
+        audio_arrays = []
+        for a in audio_list:
+            if hasattr(a, "cpu"):
+                audio_arrays.append(a.flatten().cpu().numpy())
+            else:
+                audio_arrays.append(a.flatten() if hasattr(a, "flatten") else a)
+
+        n_steps = timing["steps"]
+        audio_duration = n_steps / 12.0
+        total_time = timing["prefill_ms"] / 1000 + timing["decode_s"]
+        rtf = audio_duration / total_time if total_time > 0 else 0
+
+        logger.info(
+            f"Generated {audio_duration:.2f}s audio in {total_time:.2f}s "
+            f"({timing['ms_per_step']:.1f}ms/step, RTF: {rtf:.2f})"
+        )
+
+        return audio_arrays, sr
+
+    @torch.inference_mode()
+    def generate_voice_design_streaming(
+        self,
+        text: str,
+        instruct: str,
+        language: str,
+        max_new_tokens: int = 2048,
+        temperature: float = 0.9,
+        top_k: int = 50,
+        do_sample: bool = True,
+        repetition_penalty: float = 1.05,
+        chunk_size: int = 12,
+    ) -> Generator[Tuple[np.ndarray, int, dict], None, None]:
+        if self.model.model.tts_model_type != "voice_design":
+            raise ValueError("Loaded model does not support voice design generation")
+
+        self.model._validate_languages([language])
+
+        from .streaming import fast_generate_streaming
+
+        m, talker, config, tie, tam, tth, tpe = self._prepare_generation_custom(
+            text=text,
+            language=language,
+            speaker=None,
+            instruct=instruct,
+        )
+
+        speech_tokenizer = m.speech_tokenizer
+
+        context_frames = 25
+        min_calibration_frames = max(context_frames, chunk_size)
+        all_codes = []
+        prev_audio_len = 0
+        samples_per_frame = None
+
+        for codec_chunk, timing in fast_generate_streaming(
+            talker=talker,
+            talker_input_embeds=tie,
+            attention_mask=tam,
+            trailing_text_hiddens=tth,
+            tts_pad_embed=tpe,
+            config=config,
+            predictor_graph=self.predictor_graph,
+            talker_graph=self.talker_graph,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_k=top_k,
+            do_sample=do_sample,
+            repetition_penalty=repetition_penalty,
+            chunk_size=chunk_size,
+        ):
+            all_codes.append(codec_chunk)
+            n_new = codec_chunk.shape[0]
+            all_flat = torch.cat(all_codes, dim=0)
+            n_total = all_flat.shape[0]
+
+            if samples_per_frame is None:
+                audio_list, sr = speech_tokenizer.decode({"audio_codes": all_flat.unsqueeze(0)})
+                audio = audio_list[0]
+                if hasattr(audio, "cpu"):
+                    audio = audio.flatten().cpu().numpy()
+                else:
+                    audio = audio.flatten() if hasattr(audio, "flatten") else audio
+
+                new_audio = audio[prev_audio_len:]
+                prev_audio_len = len(audio)
+
+                if n_total >= min_calibration_frames:
+                    samples_per_frame = len(audio) / n_total
+            else:
+                ctx_start = max(0, n_total - n_new - context_frames)
+                window = all_flat[ctx_start:]
+                n_ctx = window.shape[0] - n_new
+
+                audio_list, sr = speech_tokenizer.decode({"audio_codes": window.unsqueeze(0)})
+                audio = audio_list[0]
+                if hasattr(audio, "cpu"):
+                    audio = audio.flatten().cpu().numpy()
+                else:
+                    audio = audio.flatten() if hasattr(audio, "flatten") else audio
 
                 if n_ctx > 0:
                     ctx_samples = int(round(n_ctx * samples_per_frame))

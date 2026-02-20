@@ -21,3 +21,10 @@ dependencies = [
     "soundfile",
     "huggingface-hub",
 ]
+
+[project.scripts]
+faster-qwen3-tts = "faster_qwen3_tts.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/andimarafioti/faster-qwen3-tts"
+Repository = "https://github.com/andimarafioti/faster-qwen3-tts"

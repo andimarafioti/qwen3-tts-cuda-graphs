@@ -1,10 +1,19 @@
 # Faster Qwen3-TTS
 
-Real-time Qwen3-TTS inference using CUDA graph capture. No Flash Attention, no vLLM, no Triton. Just `torch.cuda.CUDAGraph`. **1,351 lines of Python.** Supports both streaming and non-streaming generation.
+Real-time Qwen3-TTS inference using CUDA graph capture. No Flash Attention, no vLLM, no Triton. Just `torch.cuda.CUDAGraph`. Supports both streaming and non-streaming generation.
 
 ## Results
 
 Benchmarks include tokenization + inference (apples-to-apples with baseline). RTF > 1.0 = faster than real-time. TTFA measured as time to first playable audio chunk using streaming (chunk_size=8).
+
+### CustomVoice Models
+
+CustomVoice uses predefined speaker IDs (no reference audio). These benchmarks use the first available speaker ID from the model.
+
+| Model | CUDA Graphs RTF | CUDA Graphs TTFA |
+|---|---|---|
+| 0.6B CustomVoice | **5.53** | **154ms** |
+| 1.7B CustomVoice | **4.78** | **171ms** |
 
 ### 0.6B Model
 
@@ -40,6 +49,18 @@ cd faster-qwen3-tts
 ```
 
 Requires: Python 3.10+, NVIDIA GPU with CUDA, [uv](https://docs.astral.sh/uv/).
+
+### Install (PyPI)
+
+```bash
+pip install faster-qwen3-tts
+```
+
+Or from source:
+
+```bash
+pip install -e .
+```
 
 ### Benchmark a specific model
 
@@ -114,6 +135,66 @@ audio_list, sr = model.generate_voice_clone(
 )
 ```
 
+### CLI
+
+Voice cloning (reference audio):
+
+```bash
+faster-qwen3-tts clone \
+  --model Qwen/Qwen3-TTS-12Hz-1.7B-Base \
+  --text "Hello world!" \
+  --language English \
+  --ref-audio ref.wav \
+  --ref-text "Reference transcript" \
+  --output out.wav
+```
+
+CustomVoice (predefined speaker IDs):
+
+```bash
+faster-qwen3-tts custom --model Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice --list-speakers
+faster-qwen3-tts custom \
+  --model Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
+  --speaker aiden \
+  --text "Hello!" \
+  --language English \
+  --output out.wav
+```
+
+VoiceDesign (instruction-based):
+
+```bash
+faster-qwen3-tts design \
+  --model Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign \
+  --instruct "Warm, confident narrator with slight British accent" \
+  --text "Welcome to the show." \
+  --language English \
+  --output out.wav
+```
+
+Streaming (prints RTF after write):
+
+```bash
+faster-qwen3-tts custom \
+  --model Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
+  --speaker aiden \
+  --text "Hello!" \
+  --language English \
+  --output out.wav \
+  --streaming
+```
+
+Server mode (keep model hot, stop with `exit`):
+
+```bash
+faster-qwen3-tts serve \
+  --mode custom \
+  --model Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
+  --speaker aiden \
+  --language English \
+  --streaming
+```
+
 ### How it works
 
 The CUDA graphs are unchanged — both predictor and talker graphs are replayed per step. The streaming generator yields codec ID chunks every `chunk_size` steps, and the model wrapper decodes each chunk to audio using a sliding window with 25-frame left context (matching the upstream codec's `chunked_decode` pattern) to avoid boundary artifacts.
@@ -143,28 +224,16 @@ The speaker embedding is a 4KB file (2048-dim bf16 vector). In `x_vector_only` m
 - **Shorter prefill**: 10 tokens vs ~80+ in full ICL clone mode
 - **No ref audio at runtime**: just the 4KB embedding file
 
-## Comparison with Other Approaches
-
-| | nano-qwen3tts-vllm | Qwen3-TTS-streaming | **Ours** |
-|---|---|---|---|
-| Lines of code | 7,289 | ~3,000 | **1,351** |
-| Flash Attention required | Yes | No | **No** |
-| Triton/torch.compile required | No | Yes | **No** |
-| Streaming support | No | Yes | **Yes** |
-| Runs on Jetson | No | No | **Yes** |
-| RTF on H100 (1.7B) | 0.399 | N/A | **3.98** |
-
-On the same H100 hardware: **~10x faster with ~7x less code** vs nano-qwen3tts-vllm.
 
 ## Files
 
 ```
 faster_qwen3_tts/
-  model.py                        # Wrapper API (660 lines)
-  generate.py                     # Non-streaming generation loop (154 lines)
-  streaming.py                    # Streaming generation loop (180 lines)
-  predictor_graph.py              # Predictor CUDA graph with StaticCache (190 lines)
-  talker_graph.py                 # Talker CUDA graph with StaticCache (167 lines)
+  model.py                        # Wrapper API
+  generate.py                     # Non-streaming generation loop
+  streaming.py                    # Streaming generation loop
+  predictor_graph.py              # Predictor CUDA graph with StaticCache
+  talker_graph.py                 # Talker CUDA graph with StaticCache
 examples/
   extract_speaker.py              # Extract speaker embedding from ref audio
   generate_with_embedding.py      # Generate with precomputed speaker embedding
@@ -173,11 +242,10 @@ benchmarks/
   streaming.py                    # Streaming benchmark (TTFA + chunk timing)
   chunk_sweep.py                  # Chunk size sweep (RTF vs latency tradeoff)
   baseline.py                     # Baseline qwen-tts benchmark
+  custom_voice.py                 # CustomVoice benchmark
 benchmark.sh                      # Run benchmarks
 setup.sh                          # Setup venv + download models
 ```
-
-Core implementation: **1,351 lines** of Python.
 
 ## License
 
