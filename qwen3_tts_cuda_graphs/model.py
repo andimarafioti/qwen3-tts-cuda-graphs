@@ -84,7 +84,7 @@ class Qwen3TTSCudaGraphs:
         
         talker = base_model.model.talker
         talker_config = base_model.model.config.talker_config
-        
+
         # Extract predictor config from loaded model
         predictor = talker.code_predictor
         pred_config = predictor.model.config

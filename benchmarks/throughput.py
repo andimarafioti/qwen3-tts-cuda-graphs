@@ -35,27 +35,40 @@ audio_list, sr = model.generate_voice_clone(
 warmup_time = time.perf_counter() - start
 print(f"Warmup: {warmup_time:.2f}s")
 
-# TTFA (Time to First Audio) measurement
-print("\nMeasuring TTFA (5 runs)...")
-ttfa_results = []
-for i in range(5):
-    torch.cuda.synchronize()
-    t0 = time.perf_counter()
-    audio_list, sr = model.generate_voice_clone(
-        text=text[:30],
-        language="English",
-        ref_audio=ref_audio,
-        ref_text=ref_text,
-        max_new_tokens=1,
-    )
-    torch.cuda.synchronize()
-    ttfa_ms = (time.perf_counter() - t0) * 1000
-    ttfa_results.append(ttfa_ms)
-    print(f"  Run {i+1}: {ttfa_ms:.1f}ms")
+# TTFA (Time to First Audio) via streaming
+CHUNK_SIZES = [4, 8, 12]
+PRIMARY_CHUNK_SIZE = 8
+ttfa_by_chunk = {}
 
-ttfa_mean = np.mean(ttfa_results)
-ttfa_std = np.std(ttfa_results)
-print(f"  TTFA: {ttfa_mean:.1f}ms ± {ttfa_std:.1f}ms")
+print("\nMeasuring streaming TTFA (5 runs per chunk size)...")
+for chunk_size in CHUNK_SIZES:
+    ttfa_results = []
+    for i in range(5):
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        gen = model.generate_voice_clone_streaming(
+            text=text,
+            language="English",
+            ref_audio=ref_audio,
+            ref_text=ref_text,
+            chunk_size=chunk_size,
+        )
+        first_chunk, sr, timing = next(gen)
+        torch.cuda.synchronize()
+        ttfa_ms = (time.perf_counter() - t0) * 1000
+        ttfa_results.append(ttfa_ms)
+        gen.close()
+        if chunk_size == PRIMARY_CHUNK_SIZE:
+            print(f"  Run {i+1}: {ttfa_ms:.1f}ms")
+
+    mean = np.mean(ttfa_results)
+    std = np.std(ttfa_results)
+    ttfa_by_chunk[chunk_size] = {'mean': mean, 'std': std}
+    marker = " <<" if chunk_size == PRIMARY_CHUNK_SIZE else ""
+    print(f"  chunk_size={chunk_size:2d}: TTFA={mean:.0f}ms ± {std:.0f}ms{marker}")
+
+ttfa_mean = ttfa_by_chunk[PRIMARY_CHUNK_SIZE]['mean']
+ttfa_std = ttfa_by_chunk[PRIMARY_CHUNK_SIZE]['std']
 
 # Full benchmark runs
 print("\nBenchmark runs...")
@@ -125,6 +138,7 @@ if results:
         'avg_rtf': avg_rtf,
         'ttfa_ms': ttfa_mean,
         'ttfa_std_ms': ttfa_std,
+        'ttfa_by_chunk_size': {str(k): v for k, v in ttfa_by_chunk.items()},
         'runs': results,
     }
     

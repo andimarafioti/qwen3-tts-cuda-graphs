@@ -11,7 +11,7 @@ Benchmarks include tokenization + inference (apples-to-apples with baseline). RT
 | GPU | Baseline RTF | Baseline TTFA | CUDA Graphs RTF | CUDA Graphs TTFA | Speedup |
 |---|---|---|---|---|---|
 | Jetson AGX Orin 64GB | 0.175 | 2,572ms | 1.38 | 555ms | 7.9x / 4.6x |
-| Jetson Thor | 0.803 | 862ms | 1.53 | 168ms | 1.9x / 5.1x |
+| Jetson Thor | 0.803 | 862ms | 1.50 | 505ms | 1.9x / 1.7x |
 | DGX Spark (GB10) | 1.19 | 631ms | 1.44 | 477ms | 1.2x / 1.3x |
 | RTX 4090 | 1.34 | 462ms | **4.56** | **168ms** | 3.4x / 2.8x |
 | H100 80GB HBM3 | 0.59 | 1,049ms | **3.47** | **231ms** | 5.9x / 4.5x |
@@ -21,7 +21,7 @@ Benchmarks include tokenization + inference (apples-to-apples with baseline). RT
 | GPU | Baseline RTF | Baseline TTFA | CUDA Graphs RTF | CUDA Graphs TTFA | Speedup |
 |---|---|---|---|---|---|
 | Jetson AGX Orin 64GB | 0.130 | 2,594ms | 1.13 | 669ms | 8.7x / 3.9x |
-| Jetson Thor | 0.772 | 912ms | 1.24 | 198ms | 1.6x / 4.6x |
+| Jetson Thor | 0.772 | 912ms | 1.26 | 595ms | 1.6x / 1.5x |
 | DGX Spark (GB10) | 0.975 | 749ms | 1.16 | 561ms | 1.2x / 1.3x |
 | RTX 4090 | 1.32 | 468ms | **4.06** | **186ms** | 3.1x / 2.5x |
 | H100 80GB HBM3 | 0.59 | 1,045ms | **3.30** | **245ms** | 5.6x / 4.3x |
