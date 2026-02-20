@@ -95,7 +95,7 @@ Smaller chunks = lower latency but more decode overhead. `chunk_size=4` is the s
 ```python
 from qwen3_tts_cuda_graphs import Qwen3TTSCudaGraphs
 
-model = Qwen3TTSCudaGraphs.from_pretrained("models/Qwen3-TTS-12Hz-0.6B-Base")
+model = Qwen3TTSCudaGraphs.from_pretrained("Qwen/Qwen3-TTS-12Hz-0.6B-Base")
 
 # Streaming — yields audio chunks during generation
 for audio_chunk, sr, timing in model.generate_voice_clone_streaming(

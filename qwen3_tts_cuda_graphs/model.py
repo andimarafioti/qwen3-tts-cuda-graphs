@@ -9,7 +9,6 @@ import numpy as np
 from pathlib import Path
 from typing import Generator, Optional, Tuple, Union
 import logging
-import json
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +74,6 @@ class Qwen3TTSCudaGraphs:
         from qwen_tts import Qwen3TTSModel
         from .predictor_graph import PredictorGraph
         from .talker_graph import TalkerGraph
-        from transformers import PretrainedConfig
-        
         # Load base model using qwen-tts library
         base_model = Qwen3TTSModel.from_pretrained(
             model_name,
@@ -88,22 +85,13 @@ class Qwen3TTSCudaGraphs:
         talker = base_model.model.talker
         talker_config = base_model.model.config.talker_config
         
-        # Load predictor config
-        model_path = Path(model_name)
-        config_path = model_path / "config.json" if model_path.exists() else None
-        if config_path and config_path.exists():
-            with open(config_path) as f:
-                fc = json.load(f)
-            pred_config = PretrainedConfig(**fc['talker_config']['code_predictor_config'])
-            talker_hidden = fc['talker_config']['hidden_size']
-        else:
-            # Fall back to extracting from model
-            pred_config = predictor.model.config
-            talker_hidden = talker_config.hidden_size
-        
+        # Extract predictor config from loaded model
+        predictor = talker.code_predictor
+        pred_config = predictor.model.config
+        talker_hidden = talker_config.hidden_size
+
         # Build CUDA graphs
         logger.info("Building CUDA graphs...")
-        predictor = talker.code_predictor
         predictor_graph = PredictorGraph(
             predictor,
             pred_config,

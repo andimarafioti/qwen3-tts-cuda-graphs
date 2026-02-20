@@ -9,14 +9,14 @@ from qwen3_tts_cuda_graphs import Qwen3TTSCudaGraphs
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL_SIZE = os.environ.get('MODEL_SIZE', '0.6B')
-MODEL_PATH = os.path.join(PROJECT_DIR, 'models', f'Qwen3-TTS-12Hz-{MODEL_SIZE}-Base')
+MODEL_ID = f'Qwen/Qwen3-TTS-12Hz-{MODEL_SIZE}-Base'
 text = "Ladies and gentlemen, I have just been informed that this speech is being generated faster than I can speak it. The robots have officially won. Please remain calm."
 ref_audio = os.path.join(PROJECT_DIR, 'ref_audio.wav')
 ref_text = "I'm confused why some people have super short timelines, yet at the same time are bullish on scaling up reinforcement learning atop LLMs. If we're actually close to a human-like learner, then this whole approach of training on verifiable outcomes."
 
 print("Loading model...")
 model = Qwen3TTSCudaGraphs.from_pretrained(
-    MODEL_PATH,
+    MODEL_ID,
     device='cuda',
     dtype=torch.bfloat16,
     attn_implementation='eager',

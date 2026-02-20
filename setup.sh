@@ -34,27 +34,17 @@ fi
     echo "  uv pip install torch --index-url https://download.pytorch.org/whl/cu124 --python .venv/bin/python"
 }
 
-# Download models
+# Pre-download models to HuggingFace cache
 echo ""
-echo "Downloading models from HuggingFace Hub..."
+echo "Pre-downloading models to HuggingFace cache..."
 .venv/bin/python -c "
 from huggingface_hub import snapshot_download
-import os
-
-models_dir = os.path.join('$DIR', 'models')
-os.makedirs(models_dir, exist_ok=True)
 
 for model in ['Qwen3-TTS-12Hz-0.6B-Base', 'Qwen3-TTS-12Hz-1.7B-Base']:
-    dest = os.path.join(models_dir, model)
-    has_weights = os.path.exists(dest) and any(
-        f.endswith(('.safetensors', '.bin')) for f in os.listdir(dest)
-    )
-    if has_weights:
-        print(f'  {model}: already downloaded')
-    else:
-        print(f'  {model}: downloading...')
-        snapshot_download(f'Qwen/{model}', local_dir=dest)
-        print(f'  {model}: done')
+    repo_id = f'Qwen/{model}'
+    print(f'  {repo_id}: downloading...')
+    snapshot_download(repo_id)
+    print(f'  {repo_id}: done')
 "
 
 # Generate ref audio if missing
