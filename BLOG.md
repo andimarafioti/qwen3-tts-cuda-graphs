@@ -1,6 +1,6 @@
-# Real-Time Qwen3-TTS: Unlocking 5x Speed on Consumer Hardware
+# Qwen3-TTS: 4.5x Real-Time on an RTX 4090
 
-**TL;DR:** Qwen3-TTS is an incredible open-source model, but running it at production speeds requires bypassing the Python overhead. By combining transformers' `StaticCache` with `torch.cuda.CUDAGraph`, we unlocked RTF 5.0 on an RTX 4090 and RTF 1.5 on a Jetson Orin — with streaming support — all in just 1,038 lines of pure PyTorch, with zero custom attention code.
+**TL;DR:** Qwen3-TTS is an incredible open-source model, but running it at production speeds requires bypassing the Python overhead. By combining transformers' `StaticCache` with `torch.cuda.CUDAGraph`, we unlocked RTF 4.5 on an RTX 4090 and RTF 3.5 on an H100 — with streaming support — all in just 1,038 lines of pure PyTorch, with zero custom attention code.
 
 ## The Challenge: The "Reference Code" Gap
 
@@ -42,15 +42,13 @@ Our optimized implementation not only matched the Qwen team's latency claims but
 
 RTF > 1.0 = faster than real-time. TTFA = Time to First Audio, measured as time to first playable audio chunk via streaming (chunk_size=8, matching baseline's default `emit_every_frames=8`). Both include text tokenization for fair comparison. Speedup shows throughput / TTFA improvement.
 
-**Two Stories, One Optimization:**
+**For production deployment:** On the **RTX 4090** — a standard consumer GPU — throughput reaches **RTF 4.56** with streaming TTFA of just **168ms** (3.4x / 2.8x over baseline). On the **H100**, the **5.9x throughput speedup** is the largest we measured, reaching **RTF 3.47** — ready for large-scale serving. The 4090 outperforms the H100 in absolute single-stream RTF thanks to its higher boost clocks (**2.5 GHz vs 1.8 GHz**); the H100's strength lies in batch processing, not single-stream inference.
 
-On **high-end GPUs (RTX 4090)**: Baseline already achieves RTF > 1.0, so CUDA graphs aren't about making it "real-time" — they're about **latency reduction and streaming**. Throughput improves 3.4x, and streaming enables real-time audio delivery.
+**For embedded and robotics:** The **Jetson AGX Orin** sees the most dramatic transformation — from RTF 0.175 (1 second of audio takes 5.7 seconds) to **RTF 1.38** (7.9x). Streaming TTFA drops from **2.6 seconds to 555ms**, making on-device voice synthesis viable where cloud latency isn't an option.
 
-On **edge devices (Jetson Orin)**: Baseline can't keep up (RTF 0.13–0.18). CUDA graphs deliver **7.9x–8.7x** throughput speedup, crossing the real-time threshold (RTF 1.13–1.38). Streaming TTFA drops from **2,572ms to 555ms** (4.6x).
+**Why do speedups range from 1.2x to 8.7x?** CUDA graphs eliminate kernel dispatch overhead: each decode step launches ~500 small GPU operations, and in a standard Python loop the GPU idles between them while the CPU prepares each launch. The speedup scales with the CPU/GPU imbalance. When the GPU finishes kernels faster than the CPU can dispatch them — whether because the CPU is slow (Jetson Orin's 12 Cortex-A78AE cores) or because the GPU is fast (4090, H100) — there's idle time to recover, and CUDA graphs recover it. This is the common case: most real-world GPU setups have this imbalance, yielding **3–9x improvements**.
 
-**The 4090 Wins Single-Stream:** For batch=1 workloads, the RTX 4090 outperforms the H100. The H100's lower baseline (RTF 0.59 vs 4090's 1.34) reflects its design for batch processing. Even with CUDA graphs, the 4090's higher clocks (**2.5 GHz vs 1.8 GHz**) translate to better single-stream performance.
-
-**Why the DGX Spark barely benefits (1.2x):** CUDA graphs eliminate kernel launch overhead — the CPU can't dispatch ~500 small kernels per step fast enough, so the GPU idles between them. The DGX Spark's Grace CPU (72 Neoverse V2 cores) is fast enough to keep up with its modest GB10 GPU, so there's little overhead to eliminate. Compare the Jetson Orin: its 12 Cortex-A78AE cores can't feed the GPU fast enough, yielding 7.9x from CUDA graphs. The H100 and 4090 have fast GPUs that outpace their CPUs, yielding 5–6x. The Spark is the most CPU/GPU-balanced system we tested — it reaches respectable absolute RTF (1.44) but gets there mostly without CUDA graphs' help.
+The two exceptions in our benchmarks are NVIDIA's **Jetson Thor** and **DGX Spark**, both of which pair unusually powerful CPUs with more moderate GPUs. Thor's next-gen CPU pushes baseline to RTF 0.80 (4.5x faster than Orin without any optimization), and the Spark's 72-core Grace CPU reaches baseline RTF 1.19 — already real-time. With less dispatch overhead to eliminate, CUDA graphs add a modest 1.2–1.9x. The Spark is a particularly clean demonstration of the mechanism: its Grace CPU dispatches kernels efficiently enough that baseline Python overhead is minimal, confirming that CUDA graphs specifically target the CPU-to-GPU dispatch gap. These are purpose-built machines with exceptional CPU/GPU balance — on standard hardware, expect the larger speedups.
 
 ## How We Did It (The "Magic")
 
@@ -124,7 +122,7 @@ Before CUDA graphs, we systematically tried everything else:
 
 ## Conclusion
 
-Qwen3-TTS is a beast of a model. By leveraging the `StaticCache` API already available in transformers and wrapping the model's own forward pass in CUDA graphs, we can reveal its true speed — without reimplementing a single layer. With streaming support, audio starts playing within 555ms on a Jetson (4.6x faster than baseline). Whether you are running on a $30,000 H100 or a $1,000 Jetson, this model is ready for real-time prime time.
+Qwen3-TTS is a beast of a model. By leveraging the `StaticCache` API already available in transformers and wrapping the model's own forward pass in CUDA graphs, we can reveal its true speed — without reimplementing a single layer. On an RTX 4090, audio generates at 4.5x real-time with 168ms time-to-first-audio. On a Jetson Orin, streaming TTFA drops from 2.6 seconds to 555ms. Whether you're serving from an H100 or running on-device on a Jetson, this model is ready for real-time prime time.
 
 
 ---
