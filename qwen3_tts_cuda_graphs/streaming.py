@@ -123,9 +123,11 @@ def fast_generate_streaming(
         if repetition_penalty != 1.0 and all_first_tokens:
             n_recent = min(50, len(all_first_tokens))
             recent = torch.stack(all_first_tokens[-n_recent:])
-            for prev_tok in recent.unique():
-                s = logits[0, 0, prev_tok]
-                logits[0, 0, prev_tok] = s / repetition_penalty if s > 0 else s * repetition_penalty
+            unique_toks = recent.unique()
+            tok_logits = logits[0, 0, unique_toks]
+            logits[0, 0, unique_toks] = torch.where(
+                tok_logits > 0, tok_logits / repetition_penalty, tok_logits * repetition_penalty
+            )
 
         token = _sample(logits.squeeze(0), temperature, top_k, do_sample, suppress_mask)
         past_hidden = hidden_states[:, -1:, :].clone()

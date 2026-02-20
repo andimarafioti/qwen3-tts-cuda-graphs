@@ -1,40 +1,40 @@
-# Qwen3-TTS CUDA Graphs
+# Faster Qwen3-TTS
 
 Real-time Qwen3-TTS inference using CUDA graph capture. No Flash Attention, no vLLM, no Triton. Just `torch.cuda.CUDAGraph`. **1,038 lines of Python.** Supports both streaming and non-streaming generation.
 
 ## Results
 
-Benchmarks include tokenization + inference (apples-to-apples with baseline). RTF > 1.0 = faster than real-time. TTFA measured as time to first playable audio chunk using streaming (chunk_size=8, matching baseline's default `emit_every_frames=8`).
+Benchmarks include tokenization + inference (apples-to-apples with baseline). RTF > 1.0 = faster than real-time. TTFA measured as time to first playable audio chunk using streaming (chunk_size=8).
 
 ### 0.6B Model
 
 | GPU | Baseline RTF | Baseline TTFA | CUDA Graphs RTF | CUDA Graphs TTFA | Speedup |
 |---|---|---|---|---|---|
-| Jetson AGX Orin 64GB | 0.175 | 2,572ms | 1.38 | 555ms | 7.9x / 4.6x |
+| Jetson AGX Orin 64GB | 0.175 | 2,572ms | 1.57 | 556ms | 9.0x / 4.6x |
 | Jetson Thor | 0.803 | 862ms | 1.50 | 505ms | 1.9x / 1.7x |
-| DGX Spark (GB10) | 1.19 | 631ms | 1.48 | 421ms | 1.2x / 1.5x |
-| RTX 4090 | 1.34 | 462ms | **4.56** | **168ms** | 3.4x / 2.8x |
-| H100 80GB HBM3 | 0.59 | 1,049ms | **3.47** | **231ms** | 5.9x / 4.5x |
+| DGX Spark (GB10) | 1.19 | 631ms | 2.26 | 364ms | 1.9x / 1.7x |
+| RTX 4090 | 1.34 | 462ms | **5.56** | **152ms** | 4.1x / 3.0x |
+| H100 80GB HBM3 | 0.59 | 1,049ms | **4.19** | **224ms** | 7.1x / 4.7x |
 
 ### 1.7B Model
 
 | GPU | Baseline RTF | Baseline TTFA | CUDA Graphs RTF | CUDA Graphs TTFA | Speedup |
 |---|---|---|---|---|---|
-| Jetson AGX Orin 64GB | 0.130 | 2,594ms | 1.13 | 669ms | 8.7x / 3.9x |
+| Jetson AGX Orin 64GB | 0.130 | 2,594ms | 1.27 | 650ms | 9.8x / 4.0x |
 | Jetson Thor | 0.772 | 912ms | 1.26 | 595ms | 1.6x / 1.5x |
-| DGX Spark (GB10) | 0.975 | 749ms | 1.14 | 586ms | 1.2x / 1.3x |
-| RTX 4090 | 1.32 | 468ms | **4.06** | **186ms** | 3.1x / 2.5x |
-| H100 80GB HBM3 | 0.59 | 1,045ms | **3.30** | **245ms** | 5.6x / 4.3x |
+| DGX Spark (GB10) | 0.975 | 749ms | 1.66 | 464ms | 1.7x / 1.6x |
+| RTX 4090 | 1.32 | 468ms | **4.85** | **170ms** | 3.7x / 2.8x |
+| H100 80GB HBM3 | 0.59 | 1,045ms | **3.98** | **236ms** | 6.7x / 4.4x |
 
-**Note:** Baseline uses standard qwen-tts with `stream_generate_voice_clone()` (default `emit_every_frames=8`). CUDA graphs uses `generate_voice_clone_streaming(chunk_size=8)` for TTFA. Both measure time to first playable audio chunk and include text tokenization for fair comparison. Speedup shows throughput / TTFA improvement.
+**Note:** Baseline TTFA values are **streaming TTFA** from the community `Qwen3-TTS-streaming` fork (which adds streaming). The official `Qwen3-TTS` repo does **not** currently support streaming, so its “TTFA” is effectively **time-to-full-audio**. With RTF near 1.0, that means waiting for the entire sentence/paragraph to finish speaking before you hear anything. CUDA graphs uses `generate_voice_clone_streaming(chunk_size=8)` for TTFA. Both include text tokenization for fair comparison. Speedup shows throughput / TTFA improvement. The streaming fork reports additional speedups that appear tied to `torch.compile`; we couldn’t reproduce those on Jetson-class devices where `torch.compile` isn’t available.
 
 **GPU architecture notes:** RTX 4090 (2.5 GHz clocks) outperforms H100 (1.8 GHz) for single-stream workloads. H100's lower baseline (RTF 0.59 vs 4090's 1.34) reflects design optimization for batch processing rather than single-stream inference.
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/andimarafioti/qwen3-tts-cuda-graphs
-cd qwen3-tts-cuda-graphs
+git clone https://github.com/andimarafioti/faster-qwen3-tts
+cd faster-qwen3-tts
 ./setup.sh       # creates venv with uv, installs deps, downloads models
 ./benchmark.sh   # runs full benchmark, saves JSON + audio samples
 ```
@@ -83,12 +83,14 @@ CUDA graphs support streaming output — audio chunks are yielded during generat
 
 | chunk_size | TTFA | RTF | Audio per chunk |
 |---|---|---|---|
-| 4 | 355ms | 1.11 | 333ms |
-| 8 | 555ms | 1.22 | 667ms |
-| 12 | 760ms | 1.26 | 1000ms |
+| 1 | 240ms | 0.750 | 83ms |
+| 2 | 266ms | 1.042 | 167ms |
+| 4 | 362ms | 1.251 | 333ms |
+| 8 | 556ms | 1.384 | 667ms |
+| 12 | 753ms | 1.449 | 1000ms |
 | Non-streaming | — | 1.36 | all at once |
 
-Smaller chunks = lower latency but more decode overhead. `chunk_size=4` is the smallest that stays real-time on Jetson.
+Smaller chunks = lower latency but more decode overhead. `chunk_size=2` is the smallest that stays real-time on Jetson.
 
 ### Usage
 
@@ -150,7 +152,7 @@ The speaker embedding is a 4KB file (2048-dim bf16 vector). In `x_vector_only` m
 | Triton/torch.compile required | No | Yes | **No** |
 | Streaming support | No | Yes | **Yes** |
 | Runs on Jetson | No | No | **Yes** |
-| RTF on H100 (1.7B) | 0.399 | N/A | **3.80** |
+| RTF on H100 (1.7B) | 0.399 | N/A | **3.98** |
 
 On the same H100 hardware: **~10x faster with ~7x less code** vs nano-qwen3tts-vllm.
 
@@ -184,5 +186,6 @@ MIT
 ## Acknowledgments
 
 - [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) by the Qwen team
+- [Qwen3-TTS-streaming](https://github.com/dffdeeq/Qwen3-TTS-streaming) for ideas and code we adapted for streaming
 - [nano-qwen3tts-vllm](https://github.com/tsdocode/nano-qwen3tts-vllm) for inspiration on CUDA graph usage
 - NVIDIA for providing the Jetson AGX Orin board

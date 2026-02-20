@@ -1,5 +1,5 @@
 """
-qwen3-tts-cuda-graphs: Real-time Qwen3-TTS inference using CUDA graphs
+faster-qwen3-tts: Real-time Qwen3-TTS inference using CUDA graphs
 """
 from .model import Qwen3TTSCudaGraphs
 

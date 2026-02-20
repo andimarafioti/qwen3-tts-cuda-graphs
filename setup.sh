@@ -1,12 +1,12 @@
 #!/bin/bash
-# Setup script for qwen3-tts-cuda-graphs
+# Setup script for faster-qwen3-tts
 # Creates a venv with uv, installs deps, and downloads models
 set -e
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"
 
-echo "=== Qwen3-TTS CUDA Graphs Setup ==="
+echo "=== Faster Qwen3-TTS Setup ==="
 
 # Check uv is available
 if ! command -v uv &>/dev/null; then

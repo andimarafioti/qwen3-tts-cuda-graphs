@@ -1,6 +1,6 @@
-# Qwen3-TTS: 4.5x Real-Time on an RTX 4090
+# Qwen3-TTS: 5.6x Real-Time on an RTX 4090
 
-**TL;DR:** Qwen3-TTS is an incredible open-source model, but running it at production speeds requires bypassing the Python overhead. By combining transformers' `StaticCache` with `torch.cuda.CUDAGraph`, we unlocked RTF 4.5 on an RTX 4090 and RTF 3.5 on an H100 — with streaming support — all in just 1,038 lines of pure PyTorch, with zero custom attention code.
+**TL;DR:** Qwen3-TTS is an incredible open-source model, but running it at production speeds requires bypassing the Python overhead. By combining transformers' `StaticCache` with `torch.cuda.CUDAGraph`, we unlocked RTF 5.6 on an RTX 4090 and RTF 4.2 on an H100 — with streaming support — all in just 1,038 lines of pure PyTorch, with zero custom attention code.
 
 ## The Challenge: The "Reference Code" Gap
 
@@ -24,27 +24,27 @@ Our optimized implementation not only matched the Qwen team's latency claims but
 
 | GPU | Baseline RTF | Baseline TTFA | CUDA Graphs RTF | CUDA Graphs TTFA | Speedup |
 |---|---|---|---|---|---|
-| Jetson AGX Orin 64GB | 0.175 | 2,572ms | **1.38** | **555ms** | 7.9x / 4.6x |
+| Jetson AGX Orin 64GB | 0.175 | 2,572ms | **1.57** | **556ms** | 9.0x / 4.6x |
 | Jetson Thor | 0.803 | 862ms | 1.50 | 505ms | 1.9x / 1.7x |
-| DGX Spark (GB10) | 1.19 | 631ms | 1.48 | 421ms | 1.2x / 1.5x |
-| RTX 4090 | 1.34 | 462ms | **4.56** | **168ms** | 3.4x / 2.8x |
-| H100 80GB HBM3 | 0.59 | 1,049ms | **3.47** | **231ms** | 5.9x / 4.5x |
+| DGX Spark (GB10) | 1.19 | 631ms | 2.26 | 364ms | 1.9x / 1.7x |
+| RTX 4090 | 1.34 | 462ms | **5.56** | **152ms** | 4.1x / 3.0x |
+| H100 80GB HBM3 | 0.59 | 1,049ms | **4.19** | **224ms** | 7.1x / 4.7x |
 
 ### 1.7B Model
 
 | GPU | Baseline RTF | Baseline TTFA | CUDA Graphs RTF | CUDA Graphs TTFA | Speedup |
 |---|---|---|---|---|---|
-| Jetson AGX Orin 64GB | 0.130 | 2,594ms | **1.13** | **669ms** | 8.7x / 3.9x |
+| Jetson AGX Orin 64GB | 0.130 | 2,594ms | **1.27** | **650ms** | 9.8x / 4.0x |
 | Jetson Thor | 0.772 | 912ms | 1.26 | 595ms | 1.6x / 1.5x |
-| DGX Spark (GB10) | 0.975 | 749ms | 1.14 | 586ms | 1.2x / 1.3x |
-| RTX 4090 | 1.32 | 468ms | **4.06** | **186ms** | 3.1x / 2.5x |
-| H100 80GB HBM3 | 0.59 | 1,045ms | **3.30** | **245ms** | 5.6x / 4.3x |
+| DGX Spark (GB10) | 0.975 | 749ms | 1.66 | 464ms | 1.7x / 1.6x |
+| RTX 4090 | 1.32 | 468ms | **4.85** | **170ms** | 3.7x / 2.8x |
+| H100 80GB HBM3 | 0.59 | 1,045ms | **3.98** | **236ms** | 6.7x / 4.4x |
 
-RTF > 1.0 = faster than real-time. TTFA = Time to First Audio, measured as time to first playable audio chunk via streaming (chunk_size=8, matching baseline's default `emit_every_frames=8`). Both include text tokenization for fair comparison. Speedup shows throughput / TTFA improvement.
+RTF > 1.0 = faster than real-time. TTFA = Time to First Audio, measured as time to first playable audio chunk via streaming (chunk_size=8). Baseline TTFA values come from the community `Qwen3-TTS-streaming` fork (which adds streaming). The official `Qwen3-TTS` repo does **not** currently support streaming, so its “TTFA” is effectively **time-to-full-audio** — with RTF near 1.0 you must wait for the whole sentence/paragraph to finish before you hear anything. Both include text tokenization for fair comparison. Speedup shows throughput / TTFA improvement. The streaming fork reports additional speedups that appear tied to `torch.compile`; we couldn’t reproduce those on Jetson-class devices where `torch.compile` isn’t available.
 
-**For production deployment:** On the **RTX 4090** — a standard consumer GPU — throughput reaches **RTF 4.56** with streaming TTFA of just **168ms** (3.4x / 2.8x over baseline). On the **H100**, the **5.9x throughput speedup** is the largest we measured, reaching **RTF 3.47** — ready for large-scale serving. The 4090 outperforms the H100 in absolute single-stream RTF thanks to its higher boost clocks (**2.5 GHz vs 1.8 GHz**); the H100's strength lies in batch processing, not single-stream inference.
+**For production deployment:** On the **RTX 4090** — a standard consumer GPU — throughput reaches **RTF 5.56** with streaming TTFA of just **152ms** (4.1x / 3.0x over baseline). On the **H100**, the **7.1x throughput speedup** is the largest we measured, reaching **RTF 4.19** — ready for large-scale serving. The 4090 outperforms the H100 in absolute single-stream RTF thanks to its higher boost clocks (**2.5 GHz vs 1.8 GHz**); the H100's strength lies in batch processing, not single-stream inference.
 
-**For embedded and robotics:** The **Jetson AGX Orin** sees the most dramatic transformation — from RTF 0.175 (1 second of audio takes 5.7 seconds) to **RTF 1.38** (7.9x). Streaming TTFA drops from **2.6 seconds to 555ms**, making on-device voice synthesis viable where cloud latency isn't an option.
+**For embedded and robotics:** The **Jetson AGX Orin** sees the most dramatic transformation — from RTF 0.175 (1 second of audio takes 5.7 seconds) to **RTF 1.57** (9.0x). Streaming TTFA drops from **2.6 seconds to 556ms**, making on-device voice synthesis viable where cloud latency isn't an option.
 
 **Why do speedups range from 1.2x to 8.7x?** CUDA graphs eliminate kernel dispatch overhead: each decode step launches ~500 small GPU operations, and in a standard Python loop the GPU idles between them while the CPU prepares each launch. The speedup scales with the CPU/GPU imbalance. When the GPU finishes kernels faster than the CPU can dispatch them — whether because the CPU is slow (Jetson Orin's 12 Cortex-A78AE cores) or because the GPU is fast (4090, H100) — there's idle time to recover, and CUDA graphs recover it. This is the common case: most real-world GPU setups have this imbalance, yielding **3–9x improvements**.
 
@@ -71,6 +71,36 @@ The key insight: transformers already ships everything you need. Its `StaticCach
 
 This approach demonstrates the power of the PyTorch/transformers ecosystem: you don't need a custom inference engine or hand-rolled attention kernels. The building blocks — `StaticCache`, `cache_position`, `CUDAGraph` — are already there. You just need to connect them.
 
+## A Small but High-Leverage Optimization
+
+While profiling, we found a surprising hotspot: the **repetition penalty** logic in the decode loop. It was a small Python loop that indexed GPU tensors per token, which triggered CPU↔GPU syncs and cost a few milliseconds per step. On fast GPUs, that overhead becomes a meaningful fraction of the total decode time.
+
+The fix was simple: **vectorize the repetition penalty**. Instead of looping token-by-token, we gather the unique tokens and apply the penalty in one fused GPU op via `torch.where`. This doesn’t change model behavior, but it removes the Python overhead and measurably improves throughput on every GPU we tested.
+
+**Before (per-token Python loop):**
+
+```python
+if repetition_penalty != 1.0 and len(all_codec_ids) > 0:
+    n_recent = min(50, len(all_codec_ids))
+    recent = torch.stack([c[0] for c in all_codec_ids[-n_recent:]])
+    for prev_tok in recent.unique():
+        s = logits[0, 0, prev_tok]
+        logits[0, 0, prev_tok] = s / repetition_penalty if s > 0 else s * repetition_penalty
+```
+
+**After (vectorized):**
+
+```python
+if repetition_penalty != 1.0 and len(all_codec_ids) > 0:
+    n_recent = min(50, len(all_codec_ids))
+    recent = torch.stack([c[0] for c in all_codec_ids[-n_recent:]])
+    unique_toks = recent.unique()
+    tok_logits = logits[0, 0, unique_toks]
+    logits[0, 0, unique_toks] = torch.where(
+        tok_logits > 0, tok_logits / repetition_penalty, tok_logits * repetition_penalty
+    )
+```
+
 ## Streaming Support
 
 For real-time applications like voice assistants, waiting for full generation isn't an option. We added streaming output that yields audio chunks during generation — using the exact same CUDA graphs.
@@ -81,12 +111,14 @@ The streaming generator accumulates codec tokens in chunks (configurable size), 
 
 | chunk_size | TTFA | Streaming RTF | Audio per chunk |
 |---|---|---|---|
-| 4 | 355ms | 1.11 | 333ms |
-| 8 | 555ms | 1.22 | 667ms |
-| 12 | 760ms | 1.26 | 1000ms |
+| 1 | 240ms | 0.750 | 83ms |
+| 2 | 266ms | 1.042 | 167ms |
+| 4 | 362ms | 1.251 | 333ms |
+| 8 | 556ms | 1.384 | 667ms |
+| 12 | 753ms | 1.449 | 1000ms |
 | Non-streaming | — | 1.36 | all at once |
 
-`chunk_size=4` is the smallest that stays real-time on Jetson. On faster GPUs, even `chunk_size=1` should remain above RTF 1.0.
+`chunk_size=2` is the smallest that stays real-time on Jetson. On faster GPUs, even `chunk_size=1` should remain above RTF 1.0.
 
 ## An Unexpected Discovery: The ICL Phoneme Artifact
 
@@ -121,11 +153,11 @@ This is now applied automatically in `_prepare_generation()` before the referenc
 
 We've open-sourced this implementation to help the community deploy Qwen3-TTS in production environments:
 
-**[github.com/andimarafioti/qwen3-tts-cuda-graphs](https://github.com/andimarafioti/qwen3-tts-cuda-graphs)**
+**[github.com/andimarafioti/faster-qwen3-tts](https://github.com/andimarafioti/faster-qwen3-tts)**
 
 ```bash
-git clone https://github.com/andimarafioti/qwen3-tts-cuda-graphs
-cd qwen3-tts-cuda-graphs
+git clone https://github.com/andimarafioti/faster-qwen3-tts
+cd faster-qwen3-tts
 ./setup.sh       # creates venv with uv, installs deps, downloads models
 ./benchmark.sh   # runs full benchmark, saves JSON + audio samples
 ```
@@ -151,7 +183,7 @@ Before CUDA graphs, we systematically tried everything else:
 
 ## Conclusion
 
-Qwen3-TTS is a beast of a model. By leveraging the `StaticCache` API already available in transformers and wrapping the model's own forward pass in CUDA graphs, we can reveal its true speed — without reimplementing a single layer. On an RTX 4090, audio generates at 4.5x real-time with 168ms time-to-first-audio. On a Jetson Orin, streaming TTFA drops from 2.6 seconds to 555ms. Whether you're serving from an H100 or running on-device on a Jetson, this model is ready for real-time prime time.
+Qwen3-TTS is a beast of a model. By leveraging the `StaticCache` API already available in transformers and wrapping the model's own forward pass in CUDA graphs, we can reveal its true speed — without reimplementing a single layer. On an RTX 4090, audio generates at 5.6x real-time with 152ms time-to-first-audio. On a Jetson Orin, streaming TTFA drops from 2.6 seconds to 556ms. Whether you're serving from an H100 or running on-device on a Jetson, this model is ready for real-time prime time.
 
 
 ---
