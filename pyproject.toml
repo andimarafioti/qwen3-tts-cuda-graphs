@@ -12,6 +12,19 @@ version = "0.1.0"
 description = "Real-time Qwen3-TTS inference using manual CUDA graph capture"
 readme = "README.md"
 license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Andres Marafioti" }]
+keywords = ["tts", "qwen", "cuda", "cudagraph", "streaming"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 requires-python = ">=3.10"
 dependencies = [
     "qwen-tts @ git+https://github.com/QwenLM/Qwen3-TTS.git",

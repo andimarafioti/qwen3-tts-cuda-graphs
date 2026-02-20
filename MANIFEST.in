@@ -1,0 +1,17 @@
+include README.md
+include BLOG.md
+include LICENSE
+include benchmark.sh
+include setup.sh
+recursive-include faster_qwen3_tts *.py
+recursive-include benchmarks *.py
+recursive-include examples *.py
+global-exclude *.pyc
+global-exclude __pycache__/*
+exclude *.wav
+exclude bench_results_*.json
+exclude out.wav
+exclude ref_audio.wav
+exclude sample_*.wav
+prune .venv
+prune .ruff_cache

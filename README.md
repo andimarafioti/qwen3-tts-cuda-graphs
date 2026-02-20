@@ -56,7 +56,9 @@ Requires: Python 3.10+, NVIDIA GPU with CUDA, [uv](https://docs.astral.sh/uv/).
 pip install faster-qwen3-tts
 ```
 
-Or from source:
+Note: This pulls `qwen-tts` from the official GitHub repo because it is not published on PyPI yet.
+
+Install from source:
 
 ```bash
 pip install -e .
