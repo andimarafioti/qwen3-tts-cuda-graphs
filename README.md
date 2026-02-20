@@ -102,7 +102,7 @@ CUDA graphs support streaming output — audio chunks are yielded during generat
 | 4 | 362ms | 1.251 | 333ms |
 | 8 | 556ms | 1.384 | 667ms |
 | 12 | 753ms | 1.449 | 1000ms |
-| Non-streaming | — | 1.36 | all at once |
+| Non-streaming | — | 1.57 | all at once |
 
 Smaller chunks = lower latency but more decode overhead. `chunk_size=2` is the smallest that stays real-time on Jetson.
 
