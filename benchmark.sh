@@ -1,6 +1,6 @@
 #!/bin/bash
 # Benchmark Qwen3-TTS with CUDA Graphs
-# Usage: ./benchmark.sh [0.6B|1.7B|both]
+# Usage: ./benchmark.sh [0.6B|1.7B|both|custom]
 set -e
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -33,15 +33,26 @@ run_model() {
     echo ""
 }
 
+run_custom() {
+    local size=$1
+    echo "--- Benchmarking $size (CustomVoice) ---"
+    MODEL_SIZE="$size" $PY "$DIR/benchmarks/custom_voice.py"
+    echo ""
+}
+
 case "$MODEL" in
     0.6B) run_model "0.6B" ;;
     1.7B) run_model "1.7B" ;;
+    custom)
+        run_custom "0.6B"
+        run_custom "1.7B"
+        ;;
     both)
         run_model "0.6B"
         run_model "1.7B"
         ;;
     *)
-        echo "Usage: ./benchmark.sh [0.6B|1.7B|both]"
+        echo "Usage: ./benchmark.sh [0.6B|1.7B|both|custom]"
         exit 1
         ;;
 esac
