@@ -166,8 +166,15 @@ class Qwen3TTSCudaGraphs:
         silence = np.zeros(int(silence_secs * sr), dtype=np.float32)
         return np.concatenate([audio, silence]), sr
 
-    def _prepare_generation(self, text: str, ref_audio: Union[str, Path], ref_text: str):
-        """Prepare inputs for generation (shared by streaming and non-streaming)."""
+    def _prepare_generation(self, text: str, ref_audio: Union[str, Path], ref_text: str, xvec_only: bool = True):
+        """Prepare inputs for generation (shared by streaming and non-streaming).
+
+        Args:
+            xvec_only: When True (default), use only the speaker embedding (x-vector) for voice
+                cloning instead of the full ICL acoustic prompt. This prevents the model from
+                continuing the reference audio's last phoneme and allows natural language switching.
+                When False, the full reference audio codec tokens are included in context (ICL mode).
+        """
         input_texts = [f"<|im_start|>assistant\n{text}<|im_end|>\n<|im_start|>assistant\n"]
         input_ids = []
         for t in input_texts:
@@ -175,9 +182,24 @@ class Qwen3TTSCudaGraphs:
             iid = inp["input_ids"].to(self.model.device)
             input_ids.append(iid.unsqueeze(0) if iid.dim() == 1 else iid)
 
-        cache_key = (str(ref_audio), ref_text)
+        cache_key = (str(ref_audio), ref_text, xvec_only)
         if cache_key in self._voice_prompt_cache:
             vcp, ref_ids = self._voice_prompt_cache[cache_key]
+        elif xvec_only:
+            prompt_items = self.model.create_voice_clone_prompt(
+                ref_audio=str(ref_audio),
+                ref_text="",
+                x_vector_only_mode=True,
+            )
+            spk_emb = prompt_items[0].ref_spk_embedding
+            vcp = dict(
+                ref_code=[None],
+                ref_spk_embedding=[spk_emb],
+                x_vector_only_mode=[True],
+                icl_mode=[False],
+            )
+            ref_ids = []
+            self._voice_prompt_cache[cache_key] = (vcp, ref_ids)
         else:
             ref_audio_input = self._load_ref_audio_with_silence(ref_audio)
             prompt_items = self.model.create_voice_clone_prompt(
@@ -227,6 +249,7 @@ class Qwen3TTSCudaGraphs:
         top_k: int = 50,
         do_sample: bool = True,
         repetition_penalty: float = 1.05,
+        xvec_only: bool = True,
     ) -> Tuple[list, int]:
         """
         Generate speech with voice cloning using reference audio.
@@ -241,6 +264,9 @@ class Qwen3TTSCudaGraphs:
             top_k: Top-k sampling
             do_sample: Whether to sample
             repetition_penalty: Repetition penalty
+            xvec_only: When True (default), use only the speaker embedding for voice cloning.
+                This prevents phoneme bleed-through from the reference and allows clean
+                language switching. Set to False for full ICL mode (reference audio in context).
 
         Returns:
             Tuple of ([audio_waveform], sample_rate)
@@ -248,7 +274,7 @@ class Qwen3TTSCudaGraphs:
         from .generate import fast_generate
 
         m, talker, config, tie, tam, tth, tpe = self._prepare_generation(
-            text, ref_audio, ref_text
+            text, ref_audio, ref_text, xvec_only=xvec_only
         )
 
         codec_ids, timing = fast_generate(
@@ -308,6 +334,7 @@ class Qwen3TTSCudaGraphs:
         do_sample: bool = True,
         repetition_penalty: float = 1.05,
         chunk_size: int = 12,
+        xvec_only: bool = True,
     ) -> Generator[Tuple[np.ndarray, int, dict], None, None]:
         """
         Stream voice-cloned speech generation, yielding audio chunks.
@@ -326,6 +353,9 @@ class Qwen3TTSCudaGraphs:
             do_sample: Whether to sample
             repetition_penalty: Repetition penalty
             chunk_size: Codec steps per chunk (12 = ~1 second)
+            xvec_only: When True (default), use only the speaker embedding for voice cloning.
+                This prevents phoneme bleed-through from the reference and allows clean
+                language switching. Set to False for full ICL mode (reference audio in context).
 
         Yields:
             Tuple of (audio_chunk_numpy, sample_rate, timing_dict)
@@ -333,7 +363,7 @@ class Qwen3TTSCudaGraphs:
         from .streaming import fast_generate_streaming
 
         m, talker, config, tie, tam, tth, tpe = self._prepare_generation(
-            text, ref_audio, ref_text
+            text, ref_audio, ref_text, xvec_only=xvec_only
         )
 
         speech_tokenizer = m.speech_tokenizer
