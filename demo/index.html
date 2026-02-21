@@ -522,6 +522,11 @@
         <div class="mhint">time to first audio</div>
       </div>
       <div class="mbox">
+        <div class="mlabel">Client TTFA</div>
+        <div class="mval" id="mTTFAClient">—</div>
+        <div class="mhint">first sound heard</div>
+      </div>
+      <div class="mbox">
         <div class="mlabel">RTF</div>
         <div class="mval" id="mRTF">—</div>
         <div class="mhint">&gt;1× = faster than real-time</div>
@@ -530,6 +535,11 @@
         <div class="mlabel">Generated</div>
         <div class="mval" id="mDur">—</div>
         <div class="mhint">total audio duration</div>
+      </div>
+      <div class="mbox">
+        <div class="mlabel">Buffer</div>
+        <div class="mval" id="mBuf">—</div>
+        <div class="mhint">queued audio</div>
       </div>
     </div>
 
@@ -571,6 +581,10 @@ let sprocActive = false;
 let rawPcmParts = [];     // raw int16 bytes from server (for download WAV)
 let rawPcmSr    = 12000;
 let chunkQ      = Promise.resolve();
+let clientT0    = 0;
+let firstChunkAt = null;
+let firstAudioAt = null;
+let lastBufS     = 0;
 
 // Download
 let dlBlob = null;
@@ -674,11 +688,16 @@ function initAudio(sr) {
   rawPcmParts = [];
   chunkQ      = Promise.resolve();
   dlBlob      = null;
+  if (!clientT0) clientT0 = performance.now();
+  firstChunkAt = null;
+  firstAudioAt = null;
+  lastBufS     = 0;
 
   sproc = actx.createScriptProcessor(512, 0, 1);
   sproc.onaudioprocess = e => {
     const out = e.outputBuffer.getChannelData(0);
     let i = 0;
+    let wrote = false;
     while (i < out.length) {
       if (!pcmQueue.length) { out.fill(0, i); break; }
       const seg  = pcmQueue[0];
@@ -686,7 +705,12 @@ function initAudio(sr) {
       out.set(seg.data.subarray(seg.pos, seg.pos + take), i);
       seg.pos += take;
       i       += take;
+      wrote = true;
       if (seg.pos >= seg.data.length) pcmQueue.shift();
+    }
+    if (wrote && firstAudioAt == null) {
+      firstAudioAt = performance.now();
+      pushClientMetrics();
     }
   };
 }
@@ -723,6 +747,12 @@ function _processChunk(b64wav) {
 
   rawPcmParts.push(parsed.rawPcm);
   pcmQueue.push({ data: parsed.pcm, pos: 0 });
+  if (firstChunkAt == null) {
+    firstChunkAt = performance.now();
+    pushClientMetrics();
+  }
+  lastBufS = pcmQueue.reduce((s, seg) => s + (seg.data.length - seg.pos), 0) / rawPcmSr;
+  pushClientMetrics();
 
   if (!sprocActive) {
     if (actx.state === 'suspended') actx.resume();
@@ -760,8 +790,10 @@ function buildWav() {
 // ─── Metrics helpers ─────────────────────────────────────────────────────────
 function resetMetrics() {
   document.getElementById('mTTFA').innerHTML = '—';
+  document.getElementById('mTTFAClient').innerHTML = '—';
   document.getElementById('mRTF').innerHTML  = '—';
   document.getElementById('mDur').innerHTML  = '—';
+  document.getElementById('mBuf').innerHTML  = '—';
   const pb = document.getElementById('pbar');
   pb.style.width = ''; pb.classList.add('spin');
   document.getElementById('sdot').className  = 'sdot active';
@@ -778,6 +810,24 @@ function pushMetrics(ttfa_ms, rtf, audio_s) {
   if (audio_s != null)
     document.getElementById('mDur').innerHTML =
       audio_s.toFixed(1) + '<span class="munit">s</span>';
+}
+
+function pushClientMetrics() {
+  if (clientT0) {
+    if (firstAudioAt != null) {
+      const ms = firstAudioAt - clientT0;
+      document.getElementById('mTTFAClient').innerHTML =
+        Math.round(ms) + '<span class="munit">ms</span>';
+    } else if (firstChunkAt != null) {
+      const ms = firstChunkAt - clientT0;
+      document.getElementById('mTTFAClient').innerHTML =
+        Math.round(ms) + '<span class="munit">ms</span>';
+    }
+  }
+  if (lastBufS != null) {
+    document.getElementById('mBuf').innerHTML =
+      lastBufS.toFixed(2) + '<span class="munit">s</span>';
+  }
 }
 
 function setDone() {
@@ -898,6 +948,10 @@ async function generate() {
 
 async function runStreaming(fd) {
   document.getElementById('waveRow').classList.remove('hidden');
+  clientT0 = performance.now();
+  firstChunkAt = null;
+  firstAudioAt = null;
+  lastBufS = 0;
 
   const res = await fetch('/generate/stream', { method: 'POST', body: fd });
   if (!res.ok) {
