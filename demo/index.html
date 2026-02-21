@@ -1246,9 +1246,14 @@ async function runStreaming(fd) {
     };
 
     ws.binaryType = 'arraybuffer';
+    let pendingMeta = null;
     ws.onmessage = async (ev) => {
       if (typeof ev.data === 'string') {
         const d = JSON.parse(ev.data);
+        if (d.type === 'chunk_meta') {
+          pendingMeta = d;
+          return;
+        }
         if (d.type === 'done') {
           pushMetrics(d.ttfa_ms, d.rtf, d.total_audio_s, d.voice_clone_ms, d.wav_ms, d.b64_ms);
           await chunkQ;
@@ -1267,24 +1272,16 @@ async function runStreaming(fd) {
       }
 
       const buf = ev.data instanceof ArrayBuffer ? ev.data : await ev.data.arrayBuffer();
-      const dv = new DataView(buf);
-      const magic = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3));
-      if (magic !== 'FQTT') return;
-      const sr = dv.getUint32(4, true);
-      const nSamples = dv.getUint32(8, true);
-      const metaLen = dv.getUint32(12, true);
-      const metaStart = 16;
-      const metaEnd = metaStart + metaLen;
-      const pcmBytes = nSamples * 2;
-      if (buf.byteLength < metaEnd + pcmBytes) return;
-      const metaJson = new TextDecoder().decode(new Uint8Array(buf, metaStart, metaLen));
-      const meta = JSON.parse(metaJson);
-      const audioBytes = new Uint8Array(buf, metaEnd, pcmBytes);
+      if (!pendingMeta) return;
+      const meta = pendingMeta;
+      pendingMeta = null;
+
+      const audioBytes = new Uint8Array(buf);
       const i16 = new Int16Array(audioBytes.buffer, audioBytes.byteOffset, audioBytes.byteLength / 2);
       const f32 = new Float32Array(i16.length);
       for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768.0;
 
-      if (!audioInited) { await initAudio(sr); audioInited = true; }
+      if (!audioInited) { await initAudio(meta.sample_rate); audioInited = true; }
       if (firstChunkAt == null) {
         firstChunkAt = performance.now();
         if (meta.elapsed_ms != null) firstServerWall = meta.elapsed_ms;

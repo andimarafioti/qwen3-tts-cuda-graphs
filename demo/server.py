@@ -397,16 +397,17 @@ async def ws_stream(ws: WebSocket):
 
             pcm_bytes, n_samples = _to_pcm_i16(audio_chunk)
             meta = {
-                "type": "chunk",
+                "type": "chunk_meta",
+                "sample_rate": int(sr),
+                "n_samples": int(n_samples),
                 "ttfa_ms": round(ttfa_ms),
                 "voice_clone_ms": round(voice_clone_ms),
                 "rtf": round(rtf, 3),
                 "total_audio_s": round(total_audio_s, 3),
                 "elapsed_ms": round(time.perf_counter() - t0, 3) * 1000,
             }
-            meta_bytes = json.dumps(meta).encode("utf-8")
-            header = struct.pack("<4sIII", b"FQTT", int(sr), int(n_samples), int(len(meta_bytes)))
-            await ws.send_bytes(header + meta_bytes + pcm_bytes)
+            await ws.send_text(json.dumps(meta))
+            await ws.send_bytes(pcm_bytes)
 
         for audio_chunk, sr, timing in gen:
             total_gen_ms += timing.get("prefill_ms", 0) + timing.get("decode_ms", 0)
@@ -420,16 +421,17 @@ async def ws_stream(ws: WebSocket):
 
             pcm_bytes, n_samples = _to_pcm_i16(audio_chunk)
             meta = {
-                "type": "chunk",
+                "type": "chunk_meta",
+                "sample_rate": int(sr),
+                "n_samples": int(n_samples),
                 "ttfa_ms": round(ttfa_ms),
                 "voice_clone_ms": round(voice_clone_ms),
                 "rtf": round(rtf, 3),
                 "total_audio_s": round(total_audio_s, 3),
                 "elapsed_ms": round(time.perf_counter() - t0, 3) * 1000,
             }
-            meta_bytes = json.dumps(meta).encode("utf-8")
-            header = struct.pack("<4sIII", b"FQTT", int(sr), int(n_samples), int(len(meta_bytes)))
-            await ws.send_bytes(header + meta_bytes + pcm_bytes)
+            await ws.send_text(json.dumps(meta))
+            await ws.send_bytes(pcm_bytes)
 
         rtf = total_audio_s / (total_gen_ms / 1000) if total_gen_ms > 0 else 0.0
         done_payload = {
