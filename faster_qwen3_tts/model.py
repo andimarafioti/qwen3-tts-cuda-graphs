@@ -17,6 +17,45 @@ from .utils import suppress_flash_attn_warning
 logger = logging.getLogger(__name__)
 
 
+def _apply_stream_crossfade(
+    prev_tail: Optional[np.ndarray],
+    audio: np.ndarray,
+    sr: int,
+    crossfade_ms: float,
+    is_final: bool,
+) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+    if crossfade_ms <= 0:
+        return audio, None
+
+    overlap = int(sr * crossfade_ms / 1000.0)
+    if overlap <= 0:
+        return audio, None
+
+    if prev_tail is None:
+        if is_final:
+            return audio, None
+        if len(audio) <= overlap:
+            return np.empty(0, dtype=audio.dtype), audio
+        return audio[:-overlap], audio[-overlap:]
+
+    n_overlap = min(overlap, len(prev_tail), len(audio))
+    if n_overlap > 0:
+        fade = np.linspace(0.0, 1.0, n_overlap, endpoint=False, dtype=audio.dtype)
+        blended = prev_tail[-n_overlap:] * (1.0 - fade) + audio[:n_overlap] * fade
+        if len(audio) > n_overlap:
+            out = np.concatenate([blended, audio[n_overlap:]])
+        else:
+            out = blended
+    else:
+        out = audio
+
+    if is_final:
+        return out, None
+
+    if len(out) <= overlap:
+        return np.empty(0, dtype=out.dtype), out
+    return out[:-overlap], out[-overlap:]
+
 
 
 class FasterQwen3TTS:
@@ -607,6 +646,7 @@ class FasterQwen3TTS:
         repetition_penalty: float = 1.05,
         chunk_size: int = 12,
         xvec_only: bool = True,
+        crossfade_ms: float = 5.0,
     ) -> Generator[Tuple[np.ndarray, int, dict], None, None]:
         """
         Stream voice-cloned speech generation, yielding audio chunks.
@@ -649,6 +689,7 @@ class FasterQwen3TTS:
         all_codes = []
         prev_audio_len = 0
         samples_per_frame = None
+        xfade_tail = None
 
         for codec_chunk, timing in fast_generate_streaming(
             talker=talker,
@@ -708,7 +749,11 @@ class FasterQwen3TTS:
                 else:
                     new_audio = audio
 
-            yield new_audio, sr, timing
+            out_audio, xfade_tail = _apply_stream_crossfade(
+                xfade_tail, new_audio, sr, crossfade_ms, timing.get("is_final", False)
+            )
+            if out_audio.size > 0:
+                yield out_audio, sr, timing
 
     @torch.inference_mode()
     def generate_custom_voice(
@@ -796,6 +841,7 @@ class FasterQwen3TTS:
         do_sample: bool = True,
         repetition_penalty: float = 1.05,
         chunk_size: int = 12,
+        crossfade_ms: float = 5.0,
     ) -> Generator[Tuple[np.ndarray, int, dict], None, None]:
         if self.model.model.tts_model_type != "custom_voice":
             raise ValueError("Loaded model does not support custom voice generation")
@@ -822,6 +868,7 @@ class FasterQwen3TTS:
         all_codes = []
         prev_audio_len = 0
         samples_per_frame = None
+        xfade_tail = None
 
         for codec_chunk, timing in fast_generate_streaming(
             talker=talker,
@@ -875,7 +922,11 @@ class FasterQwen3TTS:
                 else:
                     new_audio = audio
 
-            yield new_audio, sr, timing
+            out_audio, xfade_tail = _apply_stream_crossfade(
+                xfade_tail, new_audio, sr, crossfade_ms, timing.get("is_final", False)
+            )
+            if out_audio.size > 0:
+                yield out_audio, sr, timing
 
     @torch.inference_mode()
     def generate_voice_design(
@@ -957,6 +1008,7 @@ class FasterQwen3TTS:
         do_sample: bool = True,
         repetition_penalty: float = 1.05,
         chunk_size: int = 12,
+        crossfade_ms: float = 5.0,
     ) -> Generator[Tuple[np.ndarray, int, dict], None, None]:
         if self.model.model.tts_model_type != "voice_design":
             raise ValueError("Loaded model does not support voice design generation")
@@ -979,6 +1031,7 @@ class FasterQwen3TTS:
         all_codes = []
         prev_audio_len = 0
         samples_per_frame = None
+        xfade_tail = None
 
         for codec_chunk, timing in fast_generate_streaming(
             talker=talker,
@@ -1032,4 +1085,8 @@ class FasterQwen3TTS:
                 else:
                     new_audio = audio
 
-            yield new_audio, sr, timing
+            out_audio, xfade_tail = _apply_stream_crossfade(
+                xfade_tail, new_audio, sr, crossfade_ms, timing.get("is_final", False)
+            )
+            if out_audio.size > 0:
+                yield out_audio, sr, timing
