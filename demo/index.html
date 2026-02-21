@@ -619,7 +619,7 @@ let refB64          = null;
 let refId           = null;
 let busy            = false;
 let loadedModelName = null;
-let useWebSocket    = true;
+let useWebSocket    = false;
 
 // Web Audio
 let actx        = null;
@@ -763,45 +763,11 @@ async function warmAudio() {
 }
 
 async function initAudio(sr) {
-  if (actx) {
-    initAudioAt = performance.now();
-    rawPcmSr = sr || rawPcmSr;
-    pcmQueue = [];
-    rawPcmParts = [];
-    chunkQ = Promise.resolve();
-    dlBlob = null;
-    firstChunkAt = null;
-    firstAudioAt = null;
-    lastBufS = 0;
-    pendingChunks = [];
-    // If worklet never initialized (e.g., autoplay blocked), rebuild it.
-    if (!workletNode) {
-      try { await actx.close(); } catch {}
-      actx = null;
-    } else {
-      if (actx.state === 'suspended') {
-        try { await actx.resume(); } catch {}
-      }
-      workletReady = true;
-      document.getElementById('mAudioPath').innerHTML = 'AudioWorklet';
-      // Keep the audio graph alive with a silent oscillator.
-      if (!keepAlive) {
-        const gain = actx.createGain();
-        gain.gain.value = 0;
-        const osc = actx.createOscillator();
-        osc.connect(gain).connect(actx.destination);
-        osc.start();
-        keepAlive = { osc, gain };
-      }
-      pushClientMetrics();
-      return;
-    }
-  }
+  if (actx) { try { actx.close(); } catch {} }
   initAudioAt = performance.now();
   rawPcmSr    = sr || 24000;
   actx        = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: rawPcmSr });
   pcmQueue    = [];
-  sprocActive = false;
   rawPcmParts = [];
   chunkQ      = Promise.resolve();
   dlBlob      = null;
@@ -809,114 +775,34 @@ async function initAudio(sr) {
   firstChunkAt = null;
   firstAudioAt = null;
   lastBufS     = 0;
-  pendingChunks = [];
 
-  if (!(actx.audioWorklet && typeof AudioWorkletNode !== 'undefined')) {
-    // Fallback: ScriptProcessor (higher latency)
-    document.getElementById('mAudioPath').innerHTML = 'ScriptProcessor';
-    sproc = actx.createScriptProcessor(256, 0, 1);
-    sproc.onaudioprocess = e => {
-      const out = e.outputBuffer.getChannelData(0);
-      let i = 0;
-      let wrote = false;
-      while (i < out.length) {
-        if (!pcmQueue.length) { out.fill(0, i); break; }
-        const seg  = pcmQueue[0];
-        const take = Math.min(out.length - i, seg.data.length - seg.pos);
-        out.set(seg.data.subarray(seg.pos, seg.pos + take), i);
-        seg.pos += take;
-        i       += take;
-        wrote = true;
-        if (seg.pos >= seg.data.length) pcmQueue.shift();
-      }
-      if (wrote && firstAudioAt == null) {
-        firstAudioAt = performance.now();
-        pushClientMetrics();
-      }
-    };
-    if (actx.state === 'suspended') await actx.resume();
-    sproc.connect(actx.destination);
-    sprocActive = true;
-    workletReady = false;
-    return;
-  }
-
-  document.getElementById('mAudioPath').innerHTML = 'AudioWorklet';
-  const processorSrc = `
-    class PcmPlayer extends AudioWorkletProcessor {
-      constructor() {
-        super();
-        this.queue = [];
-        this.started = false;
-        this.port.onmessage = (e) => {
-          const d = e.data;
-          if (d.type === 'chunk') {
-            this.queue.push(new Float32Array(d.data));
-          }
-        };
-      }
-      process(inputs, outputs) {
-        const out = outputs[0][0];
-        let i = 0;
-        let wrote = false;
-        while (i < out.length) {
-          if (!this.queue.length) { out.fill(0, i); break; }
-          const seg = this.queue[0];
-          const take = Math.min(out.length - i, seg.length);
-          out.set(seg.subarray(0, take), i);
-          i += take;
-          wrote = true;
-          if (take < seg.length) {
-            this.queue[0] = seg.subarray(take);
-          } else {
-            this.queue.shift();
-          }
-        }
-        if (wrote && !this.started) {
-          this.started = true;
-          this.port.postMessage({ type: 'first_audio' });
-        }
-        return true;
-      }
+  document.getElementById('mAudioPath').innerHTML = 'ScriptProcessor';
+  sproc = actx.createScriptProcessor(256, 0, 1);
+  sproc.onaudioprocess = e => {
+    const out = e.outputBuffer.getChannelData(0);
+    let i = 0;
+    let wrote = false;
+    while (i < out.length) {
+      if (!pcmQueue.length) { out.fill(0, i); break; }
+      const seg  = pcmQueue[0];
+      const take = Math.min(out.length - i, seg.data.length - seg.pos);
+      out.set(seg.data.subarray(seg.pos, seg.pos + take), i);
+      seg.pos += take;
+      i       += take;
+      wrote = true;
+      if (seg.pos >= seg.data.length) pcmQueue.shift();
     }
-    registerProcessor('pcm-player', PcmPlayer);
-  `;
-
-  const blob = new Blob([processorSrc], { type: 'application/javascript' });
-  const url = URL.createObjectURL(blob);
-  await actx.audioWorklet.addModule(url);
-  workletLoadedAt = performance.now();
-  URL.revokeObjectURL(url);
-
-  workletNode = new AudioWorkletNode(actx, 'pcm-player');
-  workletNode.connect(actx.destination);
-  workletNode.port.onmessage = (e) => {
-    if (e.data && e.data.type === 'first_audio' && firstAudioAt == null) {
+    if (wrote && firstAudioAt == null) {
       firstAudioAt = performance.now();
       pushClientMetrics();
     }
   };
-
   if (actx.state === 'suspended') await actx.resume();
-  workletReady = true;
-  document.getElementById('mAudioPath').innerHTML = 'AudioWorklet';
-  if (!keepAlive) {
-    const gain = actx.createGain();
-    gain.gain.value = 0;
-    const osc = actx.createOscillator();
-    osc.connect(gain).connect(actx.destination);
-    osc.start();
-    keepAlive = { osc, gain };
-  }
+  sproc.connect(actx.destination);
+  sprocActive = true;
   pushClientMetrics();
-
-  if (pendingChunks.length) {
-    for (const ch of pendingChunks) {
-      workletNode.port.postMessage({ type: 'chunk', data: ch });
-    }
-    pendingChunks = [];
-  }
 }
+
 
 // Parse a WAV Uint8Array → {pcm: Float32Array, rawPcm: Uint8Array, sr: number}
 function parseWav(bytes) {
@@ -948,42 +834,16 @@ function _processChunk(b64wav) {
   const parsed = parseWav(bytes);
   if (!parsed) return;
 
-  if (parsed.sr && parsed.sr !== rawPcmSr) {
-    // Re-init audio graph with correct sample rate to avoid pitch issues.
-    rawPcmSr = parsed.sr;
-    if (actx) { try { actx.close(); } catch {} }
-    actx = null;
-    workletNode = null;
-    workletReady = false;
-    pendingChunks = [parsed.pcm];
-    initAudio(rawPcmSr);
-    return;
-  }
-
   rawPcmParts.push(parsed.rawPcm);
-  if (workletReady && workletNode) {
-    workletNode.port.postMessage({ type: 'chunk', data: parsed.pcm });
-    if (firstWorkletMsgAt == null) {
-      firstWorkletMsgAt = performance.now();
-      pushClientMetrics();
-    }
-  } else if (workletNode) {
-    pendingChunks.push(parsed.pcm);
-  } else {
-    pcmQueue.push({ data: parsed.pcm, pos: 0 });
-  }
+  pcmQueue.push({ data: parsed.pcm, pos: 0 });
   if (firstChunkAt == null) {
     firstChunkAt = performance.now();
     pushClientMetrics();
   }
-  if (workletReady) {
-    lastBufS = 0;
-  } else {
-    lastBufS = pcmQueue.reduce((s, seg) => s + (seg.data.length - seg.pos), 0) / rawPcmSr;
-  }
+  lastBufS = pcmQueue.reduce((s, seg) => s + (seg.data.length - seg.pos), 0) / rawPcmSr;
   pushClientMetrics();
 
-  // worklet pulls from its internal queue.
+  // ScriptProcessor pulls from pcmQueue.
 }
 
 // Build download WAV from raw server bytes — exact 12 kHz model output, no resampling
