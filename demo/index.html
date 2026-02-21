@@ -593,6 +593,8 @@ let actx        = null;
 let workletNode = null;
 let workletReady = false;
 let pcmQueue    = [];     // legacy fallback (unused)
+let sproc       = null;
+let sprocActive = false;
 let rawPcmParts = [];     // raw int16 bytes from server (for download WAV)
 let rawPcmSr    = 12000;
 let chunkQ      = Promise.resolve();
@@ -700,6 +702,7 @@ async function initAudio(sr) {
   rawPcmSr    = sr || 12000;
   actx        = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: rawPcmSr });
   pcmQueue    = [];
+  sprocActive = false;
   rawPcmParts = [];
   chunkQ      = Promise.resolve();
   dlBlob      = null;
@@ -707,6 +710,35 @@ async function initAudio(sr) {
   firstChunkAt = null;
   firstAudioAt = null;
   lastBufS     = 0;
+
+  if (!(actx.audioWorklet && typeof AudioWorkletNode !== 'undefined')) {
+    // Fallback: ScriptProcessor (higher latency)
+    sproc = actx.createScriptProcessor(256, 0, 1);
+    sproc.onaudioprocess = e => {
+      const out = e.outputBuffer.getChannelData(0);
+      let i = 0;
+      let wrote = false;
+      while (i < out.length) {
+        if (!pcmQueue.length) { out.fill(0, i); break; }
+        const seg  = pcmQueue[0];
+        const take = Math.min(out.length - i, seg.data.length - seg.pos);
+        out.set(seg.data.subarray(seg.pos, seg.pos + take), i);
+        seg.pos += take;
+        i       += take;
+        wrote = true;
+        if (seg.pos >= seg.data.length) pcmQueue.shift();
+      }
+      if (wrote && firstAudioAt == null) {
+        firstAudioAt = performance.now();
+        pushClientMetrics();
+      }
+    };
+    if (actx.state === 'suspended') await actx.resume();
+    sproc.connect(actx.destination);
+    sprocActive = true;
+    workletReady = false;
+    return;
+  }
 
   const processorSrc = `
     class PcmPlayer extends AudioWorkletProcessor {
@@ -791,18 +823,26 @@ function enqueueChunk(b64wav) {
 }
 
 function _processChunk(b64wav) {
-  if (!actx || !workletReady || !workletNode) return;
+  if (!actx) return;
   const bytes  = Uint8Array.from(atob(b64wav), c => c.charCodeAt(0));
   const parsed = parseWav(bytes);
   if (!parsed) return;
 
   rawPcmParts.push(parsed.rawPcm);
-  workletNode.port.postMessage({ type: 'chunk', data: parsed.pcm });
+  if (workletReady && workletNode) {
+    workletNode.port.postMessage({ type: 'chunk', data: parsed.pcm });
+  } else {
+    pcmQueue.push({ data: parsed.pcm, pos: 0 });
+  }
   if (firstChunkAt == null) {
     firstChunkAt = performance.now();
     pushClientMetrics();
   }
-  lastBufS = 0;
+  if (workletReady) {
+    lastBufS = 0;
+  } else {
+    lastBufS = pcmQueue.reduce((s, seg) => s + (seg.data.length - seg.pos), 0) / rawPcmSr;
+  }
   pushClientMetrics();
 
   // worklet pulls from its internal queue.
