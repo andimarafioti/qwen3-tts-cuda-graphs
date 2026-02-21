@@ -627,6 +627,7 @@ let pcmQueue    = [];     // legacy fallback (unused)
 let sproc       = null;
 let sprocActive = false;
 let pendingChunks = [];
+let keepAlive = null;
 let rawPcmParts = [];     // raw int16 bytes from server (for download WAV)
 let rawPcmSr    = 24000;
 let chunkQ      = Promise.resolve();
@@ -768,6 +769,15 @@ async function initAudio(sr) {
       }
       workletReady = true;
       document.getElementById('mAudioPath').innerHTML = 'AudioWorklet';
+      // Keep the audio graph alive with a silent oscillator.
+      if (!keepAlive) {
+        const gain = actx.createGain();
+        gain.gain.value = 0;
+        const osc = actx.createOscillator();
+        osc.connect(gain).connect(actx.destination);
+        osc.start();
+        keepAlive = { osc, gain };
+      }
       pushClientMetrics();
       return;
     }
@@ -875,6 +885,14 @@ async function initAudio(sr) {
   if (actx.state === 'suspended') await actx.resume();
   workletReady = true;
   document.getElementById('mAudioPath').innerHTML = 'AudioWorklet';
+  if (!keepAlive) {
+    const gain = actx.createGain();
+    gain.gain.value = 0;
+    const osc = actx.createOscillator();
+    osc.connect(gain).connect(actx.destination);
+    osc.start();
+    keepAlive = { osc, gain };
+  }
   pushClientMetrics();
 
   if (pendingChunks.length) {
