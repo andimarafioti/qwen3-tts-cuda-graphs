@@ -517,6 +517,11 @@
 
     <div class="mgrid">
       <div class="mbox">
+        <div class="mlabel">Audio Path</div>
+        <div class="mval" id="mAudioPath">—</div>
+        <div class="mhint">worklet vs fallback</div>
+      </div>
+      <div class="mbox">
         <div class="mlabel">TTFA</div>
         <div class="mval" id="mTTFA">—</div>
         <div class="mhint">time to first audio</div>
@@ -713,6 +718,7 @@ async function initAudio(sr) {
 
   if (!(actx.audioWorklet && typeof AudioWorkletNode !== 'undefined')) {
     // Fallback: ScriptProcessor (higher latency)
+    document.getElementById('mAudioPath').innerHTML = 'ScriptProcessor';
     sproc = actx.createScriptProcessor(256, 0, 1);
     sproc.onaudioprocess = e => {
       const out = e.outputBuffer.getChannelData(0);
@@ -796,6 +802,7 @@ async function initAudio(sr) {
 
   if (actx.state === 'suspended') await actx.resume();
   workletReady = true;
+  document.getElementById('mAudioPath').innerHTML = 'AudioWorklet';
 }
 
 // Parse a WAV Uint8Array → {pcm: Float32Array, rawPcm: Uint8Array, sr: number}
@@ -876,6 +883,7 @@ function buildWav() {
 
 // ─── Metrics helpers ─────────────────────────────────────────────────────────
 function resetMetrics() {
+  document.getElementById('mAudioPath').innerHTML = '—';
   document.getElementById('mTTFA').innerHTML = '—';
   document.getElementById('mTTFAClient').innerHTML = '—';
   document.getElementById('mVC').innerHTML = '—';
