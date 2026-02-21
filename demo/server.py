@@ -69,14 +69,10 @@ def _to_wav_b64(audio: np.ndarray, sr: int) -> str:
         audio = audio.astype(np.float32)
     if audio.ndim > 1:
         audio = audio.squeeze()
-    t0 = time.perf_counter()
     buf = io.BytesIO()
     sf.write(buf, audio, sr, format="WAV", subtype="PCM_16")
-    wav_ms = (time.perf_counter() - t0) * 1000
-    t1 = time.perf_counter()
     b64 = base64.b64encode(buf.getvalue()).decode()
-    b64_ms = (time.perf_counter() - t1) * 1000
-    return b64, wav_ms, b64_ms
+    return b64
 
 
 def _concat_audio(audio_list) -> np.ndarray:
@@ -224,15 +220,13 @@ async def generate_stream(
                 total_audio_s += dur
                 rtf = total_audio_s / (total_gen_ms / 1000) if total_gen_ms > 0 else 0.0
 
-                audio_b64, wav_ms, b64_ms = _to_wav_b64(audio_chunk, sr)
+                audio_b64 = _to_wav_b64(audio_chunk, sr)
                 payload = {
                     "type": "chunk",
                     "audio_b64": audio_b64,
                     "sample_rate": sr,
                     "ttfa_ms": round(ttfa_ms),
                     "voice_clone_ms": round(voice_clone_ms),
-                    "wav_ms": round(wav_ms),
-                    "b64_ms": round(b64_ms),
                     "rtf": round(rtf, 3),
                     "total_audio_s": round(total_audio_s, 3),
                     "elapsed_ms": round(time.perf_counter() - t0, 3) * 1000,
@@ -250,15 +244,13 @@ async def generate_stream(
                 total_audio_s += dur
                 rtf = total_audio_s / (total_gen_ms / 1000) if total_gen_ms > 0 else 0.0
 
-                audio_b64, wav_ms, b64_ms = _to_wav_b64(audio_chunk, sr)
+                audio_b64 = _to_wav_b64(audio_chunk, sr)
                 payload = {
                     "type": "chunk",
                     "audio_b64": audio_b64,
                     "sample_rate": sr,
                     "ttfa_ms": round(ttfa_ms),
                     "voice_clone_ms": round(voice_clone_ms),
-                    "wav_ms": round(wav_ms),
-                    "b64_ms": round(b64_ms),
                     "rtf": round(rtf, 3),
                     "total_audio_s": round(total_audio_s, 3),
                     "elapsed_ms": round(time.perf_counter() - t0, 3) * 1000,

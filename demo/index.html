@@ -237,6 +237,15 @@
       font-size: 11px; font-weight: 600; letter-spacing: 0.8px;
       text-transform: uppercase; color: var(--dim);
     }
+    .btn-adv {
+      margin-left: auto;
+      font-size: 10px; padding: 4px 10px;
+      background: transparent; border: 1px solid var(--border2);
+      border-radius: 999px; color: var(--dim); cursor: pointer;
+      font-family: inherit; transition: all 0.15s;
+    }
+    .btn-adv:hover { border-color: var(--accent); color: var(--accent); }
+    .btn-adv.on { border-color: var(--accent); color: var(--accent); }
     .sdot {
       width: 7px; height: 7px; border-radius: 50%;
       background: var(--accent); flex-shrink: 0;
@@ -253,6 +262,8 @@
       gap: 1px; background: var(--border); border-radius: 8px;
       overflow: hidden; margin-bottom: 14px;
     }
+    .mgrid-adv { display: none; }
+    .mgrid-adv.show { display: grid; }
     .mbox { background: var(--surface2); padding: 14px 16px; }
     .mlabel {
       font-size: 10px; text-transform: uppercase; letter-spacing: 0.9px;
@@ -510,19 +521,15 @@
   <!-- Metrics card -->
   <div class="card m-card" id="mCard">
 
-    <div class="m-header">
-      <div class="sdot active" id="sdot"></div>
-      <span id="stext">Generating…</span>
-    </div>
+  <div class="m-header">
+    <div class="sdot active" id="sdot"></div>
+    <span id="stext">Generating…</span>
+    <button class="btn-adv" id="metricsAdvBtn" onclick="toggleMetricsAdv()">Advanced</button>
+  </div>
 
     <div class="mgrid">
       <div class="mbox">
-        <div class="mlabel">Audio Path</div>
-        <div class="mval" id="mAudioPath">—</div>
-        <div class="mhint">ScriptProcessor</div>
-      </div>
-      <div class="mbox">
-        <div class="mlabel">TTFA</div>
+        <div class="mlabel">Model TTFA</div>
         <div class="mval" id="mTTFA">—</div>
         <div class="mhint">time to first audio</div>
       </div>
@@ -530,6 +537,19 @@
         <div class="mlabel">Client TTFA</div>
     <div class="mval" id="mTTFAClient">—</div>
     <div class="mhint">first sound heard</div>
+      </div>
+      <div class="mbox">
+        <div class="mlabel">Model RTF</div>
+        <div class="mval" id="mRTF">—</div>
+        <div class="mhint">&gt;1× = faster than real-time</div>
+      </div>
+    </div>
+
+    <div class="mgrid mgrid-adv" id="mgridAdv">
+      <div class="mbox">
+        <div class="mlabel">Audio Path</div>
+        <div class="mval" id="mAudioPath">—</div>
+        <div class="mhint">ScriptProcessor</div>
       </div>
       <div class="mbox">
         <div class="mlabel">Voice Clone</div>
@@ -542,28 +562,13 @@
         <div class="mhint">to first chunk</div>
       </div>
       <div class="mbox">
-        <div class="mlabel">WAV Encode</div>
-        <div class="mval" id="mWavMs">—</div>
-        <div class="mhint">server per chunk</div>
-      </div>
-      <div class="mbox">
-        <div class="mlabel">Base64</div>
-        <div class="mval" id="mB64Ms">—</div>
-        <div class="mhint">server per chunk</div>
-      </div>
-      <div class="mbox">
-        <div class="mlabel">RTF</div>
-        <div class="mval" id="mRTF">—</div>
-        <div class="mhint">&gt;1× = faster than real-time</div>
-      </div>
-      <div class="mbox">
         <div class="mlabel">Generated</div>
         <div class="mval" id="mDur">—</div>
         <div class="mhint">total audio duration</div>
       </div>
       <div class="mbox">
         <div class="mlabel">Buffer</div>
-    <div class="mval" id="mBuf">—</div>
+  <div class="mval" id="mBuf">—</div>
     <div class="mhint">queued audio</div>
       </div>
       <div class="mbox">
@@ -700,6 +705,13 @@ function sv(el, id) { document.getElementById(id).textContent = el.value; }
 function toggleAdv() {
   const open = document.getElementById('advBody').classList.toggle('open');
   document.getElementById('advArr').textContent = open ? '▾' : '▸';
+}
+
+function toggleMetricsAdv() {
+  const grid = document.getElementById('mgridAdv');
+  const btn = document.getElementById('metricsAdvBtn');
+  const open = grid.classList.toggle('show');
+  btn.classList.toggle('on', open);
 }
 
 // ─── Dropzone ─────────────────────────────────────────────────────────────────
@@ -860,8 +872,6 @@ function resetMetrics() {
   document.getElementById('mTTFAClient').innerHTML = '—';
   document.getElementById('mVC').innerHTML = '—';
   document.getElementById('mServerWall').innerHTML = '—';
-  document.getElementById('mWavMs').innerHTML = '—';
-  document.getElementById('mB64Ms').innerHTML = '—';
   document.getElementById('mRTF').innerHTML  = '—';
   document.getElementById('mDur').innerHTML  = '—';
   document.getElementById('mBuf').innerHTML  = '—';
@@ -873,19 +883,13 @@ function resetMetrics() {
   document.getElementById('stext').textContent = 'Generating…';
 }
 
-function pushMetrics(ttfa_ms, rtf, audio_s, vc_ms, wav_ms, b64_ms) {
+function pushMetrics(ttfa_ms, rtf, audio_s, vc_ms) {
   if (ttfa_ms != null)
     document.getElementById('mTTFA').innerHTML =
       Math.round(ttfa_ms) + '<span class="munit">ms</span>';
   if (vc_ms != null)
     document.getElementById('mVC').innerHTML =
       Math.round(vc_ms) + '<span class="munit">ms</span>';
-  if (wav_ms != null)
-    document.getElementById('mWavMs').innerHTML =
-      Math.round(wav_ms) + '<span class="munit">ms</span>';
-  if (b64_ms != null)
-    document.getElementById('mB64Ms').innerHTML =
-      Math.round(b64_ms) + '<span class="munit">ms</span>';
   if (rtf != null)
     document.getElementById('mRTF').innerHTML =
       rtf.toFixed(2) + '<span class="munit">×</span>';
@@ -1079,11 +1083,11 @@ async function runStreaming(fd) {
           if (d.elapsed_ms != null) firstServerWall = d.elapsed_ms;
           pushClientMetrics();
         }
-        pushMetrics(d.ttfa_ms, d.rtf, d.total_audio_s, d.voice_clone_ms, d.wav_ms, d.b64_ms);
+        pushMetrics(d.ttfa_ms, d.rtf, d.total_audio_s, d.voice_clone_ms);
         enqueueChunk(d.audio_b64);
 
       } else if (d.type === 'done') {
-        pushMetrics(d.ttfa_ms, d.rtf, d.total_audio_s, d.voice_clone_ms, d.wav_ms, d.b64_ms);
+        pushMetrics(d.ttfa_ms, d.rtf, d.total_audio_s, d.voice_clone_ms);
         // Wait for all chunks to be scheduled before marking done
         await chunkQ;
         setDone();
