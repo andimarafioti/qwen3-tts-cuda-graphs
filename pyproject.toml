@@ -34,6 +34,13 @@ dependencies = [
     "huggingface-hub",
 ]
 
+[project.optional-dependencies]
+demo = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.24.0",
+    "python-multipart>=0.0.7",
+]
+
 [project.scripts]
 faster-qwen3-tts = "faster_qwen3_tts.cli:main"
 
