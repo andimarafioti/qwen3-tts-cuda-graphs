@@ -601,6 +601,7 @@ let workletReady = false;
 let pcmQueue    = [];     // legacy fallback (unused)
 let sproc       = null;
 let sprocActive = false;
+let pendingChunks = [];
 let rawPcmParts = [];     // raw int16 bytes from server (for download WAV)
 let rawPcmSr    = 12000;
 let chunkQ      = Promise.resolve();
@@ -716,6 +717,7 @@ async function initAudio(sr) {
   firstChunkAt = null;
   firstAudioAt = null;
   lastBufS     = 0;
+  pendingChunks = [];
 
   if (!(actx.audioWorklet && typeof AudioWorkletNode !== 'undefined')) {
     // Fallback: ScriptProcessor (higher latency)
@@ -804,6 +806,13 @@ async function initAudio(sr) {
   if (actx.state === 'suspended') await actx.resume();
   workletReady = true;
   document.getElementById('mAudioPath').innerHTML = 'AudioWorklet';
+
+  if (pendingChunks.length) {
+    for (const ch of pendingChunks) {
+      workletNode.port.postMessage({ type: 'chunk', data: ch });
+    }
+    pendingChunks = [];
+  }
 }
 
 // Parse a WAV Uint8Array → {pcm: Float32Array, rawPcm: Uint8Array, sr: number}
@@ -839,6 +848,8 @@ function _processChunk(b64wav) {
   rawPcmParts.push(parsed.rawPcm);
   if (workletReady && workletNode) {
     workletNode.port.postMessage({ type: 'chunk', data: parsed.pcm });
+  } else if (workletNode) {
+    pendingChunks.push(parsed.pcm);
   } else {
     pcmQueue.push({ data: parsed.pcm, pos: 0 });
   }
@@ -1066,6 +1077,8 @@ async function runStreaming(fd) {
   firstServerWall = null;
 
   if (useWebSocket) {
+    await initAudio(12000);
+    audioInited = true;
     const ws = new WebSocket(`ws://${location.host}/ws/stream`);
     let audioInited = false;
     ws.onopen = () => {
