@@ -523,8 +523,8 @@
       </div>
       <div class="mbox">
         <div class="mlabel">Client TTFA</div>
-        <div class="mval" id="mTTFAClient">—</div>
-        <div class="mhint">first sound heard</div>
+    <div class="mval" id="mTTFAClient">—</div>
+    <div class="mhint">first sound heard</div>
       </div>
       <div class="mbox">
         <div class="mlabel">Voice Clone</div>
@@ -548,14 +548,14 @@
       </div>
       <div class="mbox">
         <div class="mlabel">Buffer</div>
-        <div class="mval" id="mBuf">—</div>
-        <div class="mhint">queued audio</div>
+    <div class="mval" id="mBuf">—</div>
+    <div class="mhint">queued audio</div>
       </div>
       <div class="mbox">
         <div class="mlabel">Net+Client</div>
-        <div class="mval" id="mNetClient">—</div>
-        <div class="mhint">after server</div>
-      </div>
+    <div class="mval" id="mNetClient">—</div>
+    <div class="mhint">after server</div>
+  </div>
     </div>
 
     <div class="ptrack"><div class="pfill spin" id="pbar"></div></div>
@@ -590,9 +590,9 @@ let loadedModelName = null;
 
 // Web Audio
 let actx        = null;
-let sproc       = null;
-let pcmQueue    = [];     // [{data: Float32Array, pos: number}]
-let sprocActive = false;
+let workletNode = null;
+let workletReady = false;
+let pcmQueue    = [];     // legacy fallback (unused)
 let rawPcmParts = [];     // raw int16 bytes from server (for download WAV)
 let rawPcmSr    = 12000;
 let chunkQ      = Promise.resolve();
@@ -695,12 +695,11 @@ function setRef(f) {
 // WAV bytes avoids per-chunk resampling boundary artifacts. AudioContext runs at
 // the model's native 12 kHz so the browser resamples one continuous stream
 // to the device rate rather than each chunk independently.
-function initAudio(sr) {
+async function initAudio(sr) {
   if (actx) { try { actx.close(); } catch {} }
   rawPcmSr    = sr || 12000;
   actx        = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: rawPcmSr });
   pcmQueue    = [];
-  sprocActive = false;
   rawPcmParts = [];
   chunkQ      = Promise.resolve();
   dlBlob      = null;
@@ -709,32 +708,62 @@ function initAudio(sr) {
   firstAudioAt = null;
   lastBufS     = 0;
 
-  // Smaller buffer reduces output latency.
-  sproc = actx.createScriptProcessor(256, 0, 1);
-  sproc.onaudioprocess = e => {
-    const out = e.outputBuffer.getChannelData(0);
-    let i = 0;
-    let wrote = false;
-    while (i < out.length) {
-      if (!pcmQueue.length) { out.fill(0, i); break; }
-      const seg  = pcmQueue[0];
-      const take = Math.min(out.length - i, seg.data.length - seg.pos);
-      out.set(seg.data.subarray(seg.pos, seg.pos + take), i);
-      seg.pos += take;
-      i       += take;
-      wrote = true;
-      if (seg.pos >= seg.data.length) pcmQueue.shift();
+  const processorSrc = `
+    class PcmPlayer extends AudioWorkletProcessor {
+      constructor() {
+        super();
+        this.queue = [];
+        this.started = false;
+        this.port.onmessage = (e) => {
+          const d = e.data;
+          if (d.type === 'chunk') {
+            this.queue.push(new Float32Array(d.data));
+          }
+        };
+      }
+      process(inputs, outputs) {
+        const out = outputs[0][0];
+        let i = 0;
+        let wrote = false;
+        while (i < out.length) {
+          if (!this.queue.length) { out.fill(0, i); break; }
+          const seg = this.queue[0];
+          const take = Math.min(out.length - i, seg.length);
+          out.set(seg.subarray(0, take), i);
+          i += take;
+          wrote = true;
+          if (take < seg.length) {
+            this.queue[0] = seg.subarray(take);
+          } else {
+            this.queue.shift();
+          }
+        }
+        if (wrote && !this.started) {
+          this.started = true;
+          this.port.postMessage({ type: 'first_audio' });
+        }
+        return true;
+      }
     }
-    if (wrote && firstAudioAt == null) {
+    registerProcessor('pcm-player', PcmPlayer);
+  `;
+
+  const blob = new Blob([processorSrc], { type: 'application/javascript' });
+  const url = URL.createObjectURL(blob);
+  await actx.audioWorklet.addModule(url);
+  URL.revokeObjectURL(url);
+
+  workletNode = new AudioWorkletNode(actx, 'pcm-player');
+  workletNode.connect(actx.destination);
+  workletNode.port.onmessage = (e) => {
+    if (e.data && e.data.type === 'first_audio' && firstAudioAt == null) {
       firstAudioAt = performance.now();
       pushClientMetrics();
     }
   };
 
-  // Start audio clock immediately to avoid first-chunk startup delay.
-  if (actx.state === 'suspended') actx.resume();
-  sproc.connect(actx.destination);
-  sprocActive = true;
+  if (actx.state === 'suspended') await actx.resume();
+  workletReady = true;
 }
 
 // Parse a WAV Uint8Array → {pcm: Float32Array, rawPcm: Uint8Array, sr: number}
@@ -762,21 +791,21 @@ function enqueueChunk(b64wav) {
 }
 
 function _processChunk(b64wav) {
-  if (!actx) return;
+  if (!actx || !workletReady || !workletNode) return;
   const bytes  = Uint8Array.from(atob(b64wav), c => c.charCodeAt(0));
   const parsed = parseWav(bytes);
   if (!parsed) return;
 
   rawPcmParts.push(parsed.rawPcm);
-  pcmQueue.push({ data: parsed.pcm, pos: 0 });
+  workletNode.port.postMessage({ type: 'chunk', data: parsed.pcm });
   if (firstChunkAt == null) {
     firstChunkAt = performance.now();
     pushClientMetrics();
   }
-  lastBufS = pcmQueue.reduce((s, seg) => s + (seg.data.length - seg.pos), 0) / rawPcmSr;
+  lastBufS = 0;
   pushClientMetrics();
 
-  // sproc is already running; it will pull from pcmQueue.
+  // worklet pulls from its internal queue.
 }
 
 // Build download WAV from raw server bytes — exact 12 kHz model output, no resampling
@@ -1010,7 +1039,7 @@ async function runStreaming(fd) {
       const d = JSON.parse(line.slice(6));
 
       if (d.type === 'chunk') {
-        if (!audioInited) { initAudio(d.sample_rate); audioInited = true; }
+        if (!audioInited) { await initAudio(d.sample_rate); audioInited = true; }
         if (firstChunkAt == null) {
           firstChunkAt = performance.now();
           if (d.elapsed_ms != null) firstServerWall = d.elapsed_ms;
