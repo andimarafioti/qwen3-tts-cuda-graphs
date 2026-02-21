@@ -1078,7 +1078,6 @@ async function runStreaming(fd) {
 
   if (useWebSocket) {
     await initAudio(12000);
-    audioInited = true;
     const ws = new WebSocket(`ws://${location.host}/ws/stream`);
     let audioInited = false;
     ws.onopen = () => {
