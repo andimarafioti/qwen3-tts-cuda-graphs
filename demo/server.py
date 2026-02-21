@@ -18,6 +18,7 @@ import sys
 import tempfile
 import threading
 import time
+import struct
 from pathlib import Path
 
 import numpy as np
@@ -76,6 +77,16 @@ def _to_wav_b64(audio: np.ndarray, sr: int) -> str:
     b64 = base64.b64encode(buf.getvalue()).decode()
     b64_ms = (time.perf_counter() - t1) * 1000
     return b64, wav_ms, b64_ms
+
+
+def _to_pcm_i16(audio: np.ndarray) -> tuple[bytes, int]:
+    if audio.dtype != np.float32:
+        audio = audio.astype(np.float32)
+    if audio.ndim > 1:
+        audio = audio.squeeze()
+    audio = np.clip(audio, -1.0, 1.0)
+    i16 = (audio * 32767.0).astype(np.int16)
+    return i16.tobytes(), int(i16.shape[0])
 
 
 def _concat_audio(audio_list) -> np.ndarray:
@@ -384,20 +395,18 @@ async def ws_stream(ws: WebSocket):
             total_audio_s += dur
             rtf = total_audio_s / (total_gen_ms / 1000) if total_gen_ms > 0 else 0.0
 
-            audio_b64, wav_ms, b64_ms = _to_wav_b64(audio_chunk, sr)
-            payload = {
+            pcm_bytes, n_samples = _to_pcm_i16(audio_chunk)
+            meta = {
                 "type": "chunk",
-                "audio_b64": audio_b64,
-                "sample_rate": sr,
                 "ttfa_ms": round(ttfa_ms),
                 "voice_clone_ms": round(voice_clone_ms),
-                "wav_ms": round(wav_ms),
-                "b64_ms": round(b64_ms),
                 "rtf": round(rtf, 3),
                 "total_audio_s": round(total_audio_s, 3),
                 "elapsed_ms": round(time.perf_counter() - t0, 3) * 1000,
             }
-            await ws.send_text(json.dumps(payload))
+            meta_bytes = json.dumps(meta).encode("utf-8")
+            header = struct.pack("<4sIII", b"FQTT", int(sr), int(n_samples), int(len(meta_bytes)))
+            await ws.send_bytes(header + meta_bytes + pcm_bytes)
 
         for audio_chunk, sr, timing in gen:
             total_gen_ms += timing.get("prefill_ms", 0) + timing.get("decode_ms", 0)
@@ -409,20 +418,18 @@ async def ws_stream(ws: WebSocket):
             total_audio_s += dur
             rtf = total_audio_s / (total_gen_ms / 1000) if total_gen_ms > 0 else 0.0
 
-            audio_b64, wav_ms, b64_ms = _to_wav_b64(audio_chunk, sr)
-            payload = {
+            pcm_bytes, n_samples = _to_pcm_i16(audio_chunk)
+            meta = {
                 "type": "chunk",
-                "audio_b64": audio_b64,
-                "sample_rate": sr,
                 "ttfa_ms": round(ttfa_ms),
                 "voice_clone_ms": round(voice_clone_ms),
-                "wav_ms": round(wav_ms),
-                "b64_ms": round(b64_ms),
                 "rtf": round(rtf, 3),
                 "total_audio_s": round(total_audio_s, 3),
                 "elapsed_ms": round(time.perf_counter() - t0, 3) * 1000,
             }
-            await ws.send_text(json.dumps(payload))
+            meta_bytes = json.dumps(meta).encode("utf-8")
+            header = struct.pack("<4sIII", b"FQTT", int(sr), int(n_samples), int(len(meta_bytes)))
+            await ws.send_bytes(header + meta_bytes + pcm_bytes)
 
         rtf = total_audio_s / (total_gen_ms / 1000) if total_gen_ms > 0 else 0.0
         done_payload = {

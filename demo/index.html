@@ -1245,29 +1245,63 @@ async function runStreaming(fd) {
       ws.send(JSON.stringify(payload));
     };
 
+    ws.binaryType = 'arraybuffer';
     ws.onmessage = async (ev) => {
-      const d = JSON.parse(ev.data);
-      if (d.type === 'chunk') {
-        if (!audioInited) { await initAudio(d.sample_rate); audioInited = true; }
-        if (firstChunkAt == null) {
-          firstChunkAt = performance.now();
-          if (d.elapsed_ms != null) firstServerWall = d.elapsed_ms;
+      if (typeof ev.data === 'string') {
+        const d = JSON.parse(ev.data);
+        if (d.type === 'done') {
+          pushMetrics(d.ttfa_ms, d.rtf, d.total_audio_s, d.voice_clone_ms, d.wav_ms, d.b64_ms);
+          await chunkQ;
+          setDone();
+          document.getElementById('waveRow').classList.add('hidden');
+          const blob = buildWav();
+          if (blob) setPlayer(blob);
+          ws.close();
+          return;
+        }
+        if (d.type === 'error') {
+          ws.close();
+          throw new Error(d.message);
+        }
+        return;
+      }
+
+      const buf = ev.data instanceof ArrayBuffer ? ev.data : await ev.data.arrayBuffer();
+      const dv = new DataView(buf);
+      const magic = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3));
+      if (magic !== 'FQTT') return;
+      const sr = dv.getUint32(4, true);
+      const nSamples = dv.getUint32(8, true);
+      const metaLen = dv.getUint32(12, true);
+      const metaStart = 16;
+      const metaEnd = metaStart + metaLen;
+      const metaJson = new TextDecoder().decode(new Uint8Array(buf, metaStart, metaLen));
+      const meta = JSON.parse(metaJson);
+      const audioBytes = new Uint8Array(buf, metaEnd);
+      const i16 = new Int16Array(audioBytes.buffer, audioBytes.byteOffset, audioBytes.byteLength / 2);
+      const f32 = new Float32Array(i16.length);
+      for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768.0;
+
+      if (!audioInited) { await initAudio(sr); audioInited = true; }
+      if (firstChunkAt == null) {
+        firstChunkAt = performance.now();
+        if (meta.elapsed_ms != null) firstServerWall = meta.elapsed_ms;
+        pushClientMetrics();
+      }
+      pushMetrics(meta.ttfa_ms, meta.rtf, meta.total_audio_s, meta.voice_clone_ms, meta.wav_ms, meta.b64_ms);
+      rawPcmParts.push(audioBytes);
+      if (workletReady && workletNode) {
+        workletNode.port.postMessage({ type: 'chunk', data: f32 });
+        if (firstWorkletMsgAt == null) {
+          firstWorkletMsgAt = performance.now();
           pushClientMetrics();
         }
-        pushMetrics(d.ttfa_ms, d.rtf, d.total_audio_s, d.voice_clone_ms, d.wav_ms, d.b64_ms);
-        enqueueChunk(d.audio_b64);
-      } else if (d.type === 'done') {
-        pushMetrics(d.ttfa_ms, d.rtf, d.total_audio_s, d.voice_clone_ms, d.wav_ms, d.b64_ms);
-        await chunkQ;
-        setDone();
-        document.getElementById('waveRow').classList.add('hidden');
-        const blob = buildWav();
-        if (blob) setPlayer(blob);
-        ws.close();
-      } else if (d.type === 'error') {
-        ws.close();
-        throw new Error(d.message);
+      } else if (workletNode) {
+        pendingChunks.push(f32);
+      } else {
+        pcmQueue.push({ data: f32, pos: 0 });
       }
+      pushClientMetrics();
     };
     return;
   }
