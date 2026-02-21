@@ -17,44 +17,77 @@ from .utils import suppress_flash_attn_warning
 logger = logging.getLogger(__name__)
 
 
-def _apply_stream_crossfade(
-    prev_tail: Optional[np.ndarray],
-    audio: np.ndarray,
-    sr: int,
-    crossfade_ms: float,
-    is_final: bool,
-) -> Tuple[np.ndarray, Optional[np.ndarray]]:
-    if crossfade_ms <= 0:
-        return audio, None
+def _stream_decode_chunks(
+    speech_tokenizer,
+    codec_chunk_iter,
+    context_frames: int,
+    lookahead_frames: int,
+    smooth_ms: float = 5.0,
+) -> Generator[Tuple[np.ndarray, int, dict], None, None]:
+    spf = int(speech_tokenizer.get_decode_upsample_rate())
+    sr_out = int(speech_tokenizer.get_output_sample_rate())
+    smooth_samples = int(sr_out * smooth_ms / 1000.0)
+    smooth_samples = max(0, smooth_samples)
+    all_codes = []
+    last_committed = 0
+    prev_tail = None
+    prev_last = None
 
-    overlap = int(sr * crossfade_ms / 1000.0)
-    if overlap <= 0:
-        return audio, None
+    for codec_chunk, timing in codec_chunk_iter:
+        all_codes.append(codec_chunk)
+        all_flat = torch.cat(all_codes, dim=0)
+        n_total = all_flat.shape[0]
 
-    if prev_tail is None:
-        if is_final:
-            return audio, None
-        if len(audio) <= overlap:
-            return np.empty(0, dtype=audio.dtype), audio
-        return audio[:-overlap], audio[-overlap:]
+        right_ctx = 0 if timing.get("is_final", False) else max(0, lookahead_frames)
+        if n_total <= right_ctx:
+            continue
 
-    n_overlap = min(overlap, len(prev_tail), len(audio))
-    if n_overlap > 0:
-        fade = np.linspace(0.0, 1.0, n_overlap, endpoint=False, dtype=audio.dtype)
-        blended = prev_tail[-n_overlap:] * (1.0 - fade) + audio[:n_overlap] * fade
-        if len(audio) > n_overlap:
-            out = np.concatenate([blended, audio[n_overlap:]])
+        commit_frames = n_total - right_ctx
+        if commit_frames <= last_committed:
+            continue
+
+        window_start = max(0, commit_frames - max(1, context_frames))
+        window = all_flat[window_start:n_total]
+
+        audio_list, sr = speech_tokenizer.decode({"audio_codes": window.unsqueeze(0)})
+        audio = audio_list[0]
+        if hasattr(audio, "cpu"):
+            audio = audio.flatten().cpu().numpy()
         else:
-            out = blended
-    else:
-        out = audio
+            audio = audio.flatten() if hasattr(audio, "flatten") else audio
 
-    if is_final:
-        return out, None
+        start_frame = max(0, last_committed - window_start)
+        end_frame = max(start_frame, commit_frames - window_start)
+        start_s = start_frame * spf
+        end_s = end_frame * spf
 
-    if len(out) <= overlap:
-        return np.empty(0, dtype=out.dtype), out
-    return out[:-overlap], out[-overlap:]
+        new_audio = audio[start_s:end_s]
+        last_committed = commit_frames
+
+        if new_audio.size == 0:
+            continue
+
+        if smooth_samples > 0:
+            if prev_tail is not None:
+                n = min(smooth_samples, len(prev_tail), len(new_audio))
+                if n > 0:
+                    fade = np.linspace(0.0, 1.0, n, endpoint=False, dtype=new_audio.dtype)
+                    new_audio[:n] = prev_tail[-n:] * (1.0 - fade) + new_audio[:n] * fade
+
+            if prev_last is not None and len(new_audio) > 1:
+                local = np.abs(np.diff(new_audio[: min(len(new_audio), smooth_samples * 4)]))
+                local_med = float(np.median(local)) if local.size > 0 else 0.0
+                boundary_delta = abs(new_audio[0] - prev_last)
+                if local_med > 0 and boundary_delta > local_med * 8.0:
+                    n = min(smooth_samples, len(new_audio))
+                    if n > 1:
+                        ramp = np.linspace(prev_last, new_audio[n - 1], n, dtype=new_audio.dtype)
+                        new_audio[:n] = ramp
+
+        prev_tail = new_audio[-smooth_samples:] if smooth_samples > 0 else None
+        prev_last = float(new_audio[-1]) if len(new_audio) else prev_last
+
+        yield new_audio, sr, timing
 
 
 
@@ -646,7 +679,6 @@ class FasterQwen3TTS:
         repetition_penalty: float = 1.05,
         chunk_size: int = 12,
         xvec_only: bool = True,
-        crossfade_ms: float = 0.0,
     ) -> Generator[Tuple[np.ndarray, int, dict], None, None]:
         """
         Stream voice-cloned speech generation, yielding audio chunks.
@@ -679,19 +711,10 @@ class FasterQwen3TTS:
         )
 
         speech_tokenizer = m.speech_tokenizer
-
-        # Hybrid decode strategy:
-        # 1. Accumulated decode for early chunks (correct, calibrates samples_per_frame)
-        # 2. Sliding window with 25-frame left context once calibrated (constant cost)
-        # This avoids boundary artifacts (pops) while keeping decode cost bounded.
         context_frames = 25
-        min_calibration_frames = max(context_frames, chunk_size)
-        all_codes = []
-        prev_audio_len = 0
-        samples_per_frame = None
-        xfade_tail = None
+        lookahead_frames = 0
 
-        for codec_chunk, timing in fast_generate_streaming(
+        codec_iter = fast_generate_streaming(
             talker=talker,
             talker_input_embeds=tie,
             attention_mask=tam,
@@ -706,56 +729,15 @@ class FasterQwen3TTS:
             do_sample=do_sample,
             repetition_penalty=repetition_penalty,
             chunk_size=chunk_size,
+        )
+
+        for audio_chunk, sr, timing in _stream_decode_chunks(
+            speech_tokenizer,
+            codec_iter,
+            context_frames=context_frames,
+            lookahead_frames=lookahead_frames,
         ):
-            all_codes.append(codec_chunk)
-            n_new = codec_chunk.shape[0]
-            all_flat = torch.cat(all_codes, dim=0)
-            n_total = all_flat.shape[0]
-
-            if samples_per_frame is None:
-                # Phase 1: accumulated decode until we can calibrate
-                audio_list, sr = speech_tokenizer.decode(
-                    {"audio_codes": all_flat.unsqueeze(0)}
-                )
-                audio = audio_list[0]
-                if hasattr(audio, 'cpu'):
-                    audio = audio.flatten().cpu().numpy()
-                else:
-                    audio = audio.flatten() if hasattr(audio, 'flatten') else audio
-
-                new_audio = audio[prev_audio_len:]
-                prev_audio_len = len(audio)
-
-                if n_total >= min_calibration_frames:
-                    samples_per_frame = len(audio) / n_total
-            else:
-                # Phase 2: sliding window with left context
-                ctx_start = max(0, n_total - n_new - context_frames)
-                window = all_flat[ctx_start:]
-                n_ctx = window.shape[0] - n_new
-
-                audio_list, sr = speech_tokenizer.decode(
-                    {"audio_codes": window.unsqueeze(0)}
-                )
-                audio = audio_list[0]
-                if hasattr(audio, 'cpu'):
-                    audio = audio.flatten().cpu().numpy()
-                else:
-                    audio = audio.flatten() if hasattr(audio, 'flatten') else audio
-
-                # Recompute samples/frame from this window to avoid drift
-                window_spf = len(audio) / max(window.shape[0], 1)
-                if n_ctx > 0:
-                    ctx_samples = int(round(n_ctx * window_spf))
-                    new_audio = audio[ctx_samples:]
-                else:
-                    new_audio = audio
-
-            out_audio, xfade_tail = _apply_stream_crossfade(
-                xfade_tail, new_audio, sr, crossfade_ms, timing.get("is_final", False)
-            )
-            if out_audio.size > 0:
-                yield out_audio, sr, timing
+            yield audio_chunk, sr, timing
 
     @torch.inference_mode()
     def generate_custom_voice(
@@ -843,7 +825,6 @@ class FasterQwen3TTS:
         do_sample: bool = True,
         repetition_penalty: float = 1.05,
         chunk_size: int = 12,
-        crossfade_ms: float = 0.0,
     ) -> Generator[Tuple[np.ndarray, int, dict], None, None]:
         if self.model.model.tts_model_type != "custom_voice":
             raise ValueError("Loaded model does not support custom voice generation")
@@ -864,15 +845,10 @@ class FasterQwen3TTS:
         )
 
         speech_tokenizer = m.speech_tokenizer
-
         context_frames = 25
-        min_calibration_frames = max(context_frames, chunk_size)
-        all_codes = []
-        prev_audio_len = 0
-        samples_per_frame = None
-        xfade_tail = None
+        lookahead_frames = 0
 
-        for codec_chunk, timing in fast_generate_streaming(
+        codec_iter = fast_generate_streaming(
             talker=talker,
             talker_input_embeds=tie,
             attention_mask=tam,
@@ -887,49 +863,15 @@ class FasterQwen3TTS:
             do_sample=do_sample,
             repetition_penalty=repetition_penalty,
             chunk_size=chunk_size,
+        )
+
+        for audio_chunk, sr, timing in _stream_decode_chunks(
+            speech_tokenizer,
+            codec_iter,
+            context_frames=context_frames,
+            lookahead_frames=lookahead_frames,
         ):
-            all_codes.append(codec_chunk)
-            n_new = codec_chunk.shape[0]
-            all_flat = torch.cat(all_codes, dim=0)
-            n_total = all_flat.shape[0]
-
-            if samples_per_frame is None:
-                audio_list, sr = speech_tokenizer.decode({"audio_codes": all_flat.unsqueeze(0)})
-                audio = audio_list[0]
-                if hasattr(audio, "cpu"):
-                    audio = audio.flatten().cpu().numpy()
-                else:
-                    audio = audio.flatten() if hasattr(audio, "flatten") else audio
-
-                new_audio = audio[prev_audio_len:]
-                prev_audio_len = len(audio)
-
-                if n_total >= min_calibration_frames:
-                    samples_per_frame = len(audio) / n_total
-            else:
-                ctx_start = max(0, n_total - n_new - context_frames)
-                window = all_flat[ctx_start:]
-                n_ctx = window.shape[0] - n_new
-
-                audio_list, sr = speech_tokenizer.decode({"audio_codes": window.unsqueeze(0)})
-                audio = audio_list[0]
-                if hasattr(audio, "cpu"):
-                    audio = audio.flatten().cpu().numpy()
-                else:
-                    audio = audio.flatten() if hasattr(audio, "flatten") else audio
-
-                window_spf = len(audio) / max(window.shape[0], 1)
-                if n_ctx > 0:
-                    ctx_samples = int(round(n_ctx * window_spf))
-                    new_audio = audio[ctx_samples:]
-                else:
-                    new_audio = audio
-
-            out_audio, xfade_tail = _apply_stream_crossfade(
-                xfade_tail, new_audio, sr, crossfade_ms, timing.get("is_final", False)
-            )
-            if out_audio.size > 0:
-                yield out_audio, sr, timing
+            yield audio_chunk, sr, timing
 
     @torch.inference_mode()
     def generate_voice_design(
@@ -1011,7 +953,6 @@ class FasterQwen3TTS:
         do_sample: bool = True,
         repetition_penalty: float = 1.05,
         chunk_size: int = 12,
-        crossfade_ms: float = 0.0,
     ) -> Generator[Tuple[np.ndarray, int, dict], None, None]:
         if self.model.model.tts_model_type != "voice_design":
             raise ValueError("Loaded model does not support voice design generation")
@@ -1028,15 +969,10 @@ class FasterQwen3TTS:
         )
 
         speech_tokenizer = m.speech_tokenizer
-
         context_frames = 25
-        min_calibration_frames = max(context_frames, chunk_size)
-        all_codes = []
-        prev_audio_len = 0
-        samples_per_frame = None
-        xfade_tail = None
+        lookahead_frames = 0
 
-        for codec_chunk, timing in fast_generate_streaming(
+        codec_iter = fast_generate_streaming(
             talker=talker,
             talker_input_embeds=tie,
             attention_mask=tam,
@@ -1051,46 +987,12 @@ class FasterQwen3TTS:
             do_sample=do_sample,
             repetition_penalty=repetition_penalty,
             chunk_size=chunk_size,
+        )
+
+        for audio_chunk, sr, timing in _stream_decode_chunks(
+            speech_tokenizer,
+            codec_iter,
+            context_frames=context_frames,
+            lookahead_frames=lookahead_frames,
         ):
-            all_codes.append(codec_chunk)
-            n_new = codec_chunk.shape[0]
-            all_flat = torch.cat(all_codes, dim=0)
-            n_total = all_flat.shape[0]
-
-            if samples_per_frame is None:
-                audio_list, sr = speech_tokenizer.decode({"audio_codes": all_flat.unsqueeze(0)})
-                audio = audio_list[0]
-                if hasattr(audio, "cpu"):
-                    audio = audio.flatten().cpu().numpy()
-                else:
-                    audio = audio.flatten() if hasattr(audio, "flatten") else audio
-
-                new_audio = audio[prev_audio_len:]
-                prev_audio_len = len(audio)
-
-                if n_total >= min_calibration_frames:
-                    samples_per_frame = len(audio) / n_total
-            else:
-                ctx_start = max(0, n_total - n_new - context_frames)
-                window = all_flat[ctx_start:]
-                n_ctx = window.shape[0] - n_new
-
-                audio_list, sr = speech_tokenizer.decode({"audio_codes": window.unsqueeze(0)})
-                audio = audio_list[0]
-                if hasattr(audio, "cpu"):
-                    audio = audio.flatten().cpu().numpy()
-                else:
-                    audio = audio.flatten() if hasattr(audio, "flatten") else audio
-
-                window_spf = len(audio) / max(window.shape[0], 1)
-                if n_ctx > 0:
-                    ctx_samples = int(round(n_ctx * window_spf))
-                    new_audio = audio[ctx_samples:]
-                else:
-                    new_audio = audio
-
-            out_audio, xfade_tail = _apply_stream_crossfade(
-                xfade_tail, new_audio, sr, crossfade_ms, timing.get("is_final", False)
-            )
-            if out_audio.size > 0:
-                yield out_audio, sr, timing
+            yield audio_chunk, sr, timing
