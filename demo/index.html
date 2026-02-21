@@ -628,7 +628,7 @@ let sproc       = null;
 let sprocActive = false;
 let pendingChunks = [];
 let rawPcmParts = [];     // raw int16 bytes from server (for download WAV)
-let rawPcmSr    = 12000;
+let rawPcmSr    = 24000;
 let chunkQ      = Promise.resolve();
 let clientT0    = 0;
 let firstChunkAt = null;
@@ -737,7 +737,7 @@ function setRef(f) {
 async function warmAudio() {
   if (actx) return;
   try {
-    await initAudio(12000);
+    await initAudio(24000);
   } catch (e) {
     console.warn('Audio warmup failed (will retry on generate):', e);
   }
@@ -769,7 +769,7 @@ async function initAudio(sr) {
     }
   }
   initAudioAt = performance.now();
-  rawPcmSr    = sr || 12000;
+  rawPcmSr    = sr || 24000;
   actx        = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: rawPcmSr });
   pcmQueue    = [];
   sprocActive = false;
@@ -909,6 +909,18 @@ function _processChunk(b64wav) {
   const bytes  = Uint8Array.from(atob(b64wav), c => c.charCodeAt(0));
   const parsed = parseWav(bytes);
   if (!parsed) return;
+
+  if (parsed.sr && parsed.sr !== rawPcmSr) {
+    // Re-init audio graph with correct sample rate to avoid pitch issues.
+    rawPcmSr = parsed.sr;
+    if (actx) { try { actx.close(); } catch {} }
+    actx = null;
+    workletNode = null;
+    workletReady = false;
+    pendingChunks = [parsed.pcm];
+    initAudio(rawPcmSr);
+    return;
+  }
 
   rawPcmParts.push(parsed.rawPcm);
   if (workletReady && workletNode) {
