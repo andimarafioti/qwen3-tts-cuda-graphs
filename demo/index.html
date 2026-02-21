@@ -564,14 +564,12 @@ let busy            = false;
 let loadedModelName = null;
 
 // Web Audio
-let actx          = null;
-let schedEnd      = 0;
-let collectBufs   = [];
-let chunkQ        = Promise.resolve();
-let targetLatency = 0.08;
-let pendingBufs   = [];
-let pendingDur    = 0;
-let started       = false;
+let actx        = null;
+let sproc       = null;   // ScriptProcessorNode — reads continuously from pcmQueue
+let pcmQueue    = [];     // [{data: Float32Array, pos: number}]
+let sprocActive = false;
+let collectBufs = [];     // AudioBuffers kept for WAV rebuild after streaming
+let chunkQ      = Promise.resolve();
 
 // Download
 let dlBlob = null;
@@ -661,26 +659,40 @@ function setRef(f) {
   document.getElementById('dzName').textContent = '✓ ' + f.name;
 }
 
-// ─── Web Audio: gapless streaming player ─────────────────────────────────────
+// ─── Web Audio: gapless streaming via ScriptProcessor ────────────────────────
+// A ScriptProcessorNode reads continuously from a PCM queue, eliminating the
+// timestamp-scheduling gaps that caused clicks between AudioBufferSourceNodes.
 function initAudio() {
-  if (actx) actx.close();
-  actx       = new (window.AudioContext || window.webkitAudioContext)();
-  schedEnd   = 0;
+  if (actx) { try { actx.close(); } catch {} }
+  actx        = new (window.AudioContext || window.webkitAudioContext)();
+  pcmQueue    = [];
+  sprocActive = false;
   collectBufs = [];
-  targetLatency = 0.08;
-  pendingBufs = [];
-  pendingDur = 0;
-  started = false;
-  chunkQ     = Promise.resolve();
-  dlBlob     = null;
+  chunkQ      = Promise.resolve();
+  dlBlob      = null;
+
+  // 512 frames ≈ 12 ms at 44.1 kHz — low latency, still stable
+  sproc = actx.createScriptProcessor(512, 0, 1);
+  sproc.onaudioprocess = e => {
+    const out = e.outputBuffer.getChannelData(0);
+    let i = 0;
+    while (i < out.length) {
+      if (!pcmQueue.length) { out.fill(0, i); break; }
+      const seg  = pcmQueue[0];
+      const take = Math.min(out.length - i, seg.data.length - seg.pos);
+      out.set(seg.data.subarray(seg.pos, seg.pos + take), i);
+      seg.pos += take;
+      i       += take;
+      if (seg.pos >= seg.data.length) pcmQueue.shift();
+    }
+  };
 }
 
 function enqueueChunk(b64wav) {
-  // Serial queue ensures chunks play in order even if decodeAudioData resolves out of order
-  chunkQ = chunkQ.then(() => _playChunk(b64wav));
+  chunkQ = chunkQ.then(() => _processChunk(b64wav));
 }
 
-async function _playChunk(b64wav) {
+async function _processChunk(b64wav) {
   if (!actx) return;
   const bytes = Uint8Array.from(atob(b64wav), c => c.charCodeAt(0));
   let buf;
@@ -689,37 +701,12 @@ async function _playChunk(b64wav) {
   } catch (e) { console.warn('decode error', e); return; }
 
   collectBufs.push(buf);
+  pcmQueue.push({ data: buf.getChannelData(0).slice(), pos: 0 });
 
-  // Resume context if suspended (browser autoplay policy)
-  if (actx.state === 'suspended') await actx.resume();
-
-  pendingBufs.push(buf);
-  pendingDur += buf.duration;
-
-  const minBuffer = 0.12;
-  if (!started && pendingDur < minBuffer) return;
-
-  const now = actx.currentTime;
-  if (now > schedEnd) {
-    targetLatency = Math.min(0.25, targetLatency + 0.04);
-  } else {
-    targetLatency = Math.max(0.02, targetLatency - 0.005);
-  }
-
-  if (!started) {
-    started = true;
-    schedEnd = Math.max(schedEnd, now + targetLatency);
-  }
-
-  while (pendingBufs.length) {
-    const b = pendingBufs.shift();
-    const src = actx.createBufferSource();
-    src.buffer = b;
-    src.connect(actx.destination);
-    const startAt = Math.max(schedEnd, now + targetLatency);
-    src.start(startAt);
-    schedEnd = startAt + b.duration;
-    pendingDur -= b.duration;
+  if (!sprocActive) {
+    if (actx.state === 'suspended') await actx.resume();
+    sproc.connect(actx.destination);
+    sprocActive = true;
   }
 }
 
