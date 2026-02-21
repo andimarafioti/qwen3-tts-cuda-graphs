@@ -709,7 +709,8 @@ function initAudio(sr) {
   firstAudioAt = null;
   lastBufS     = 0;
 
-  sproc = actx.createScriptProcessor(512, 0, 1);
+  // Smaller buffer reduces output latency.
+  sproc = actx.createScriptProcessor(256, 0, 1);
   sproc.onaudioprocess = e => {
     const out = e.outputBuffer.getChannelData(0);
     let i = 0;
@@ -729,6 +730,11 @@ function initAudio(sr) {
       pushClientMetrics();
     }
   };
+
+  // Start audio clock immediately to avoid first-chunk startup delay.
+  if (actx.state === 'suspended') actx.resume();
+  sproc.connect(actx.destination);
+  sprocActive = true;
 }
 
 // Parse a WAV Uint8Array → {pcm: Float32Array, rawPcm: Uint8Array, sr: number}
@@ -770,11 +776,7 @@ function _processChunk(b64wav) {
   lastBufS = pcmQueue.reduce((s, seg) => s + (seg.data.length - seg.pos), 0) / rawPcmSr;
   pushClientMetrics();
 
-  if (!sprocActive) {
-    if (actx.state === 'suspended') actx.resume();
-    sproc.connect(actx.destination);
-    sprocActive = true;
-  }
+  // sproc is already running; it will pull from pcmQueue.
 }
 
 // Build download WAV from raw server bytes — exact 12 kHz model output, no resampling
