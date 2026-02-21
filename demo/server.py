@@ -57,6 +57,8 @@ _model: FasterQwen3TTS | None = None
 _model_name: str | None = None
 _model_lock = threading.Lock()
 _loading = False
+_ref_cache: dict[str, str] = {}
+_ref_cache_lock = threading.Lock()
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -316,14 +318,22 @@ async def ws_stream(ws: WebSocket):
     top_k = int(cfg.get("top_k", 50))
     repetition_penalty = float(cfg.get("repetition_penalty", 1.05))
     ref_audio_b64 = cfg.get("ref_audio_b64")
+    ref_id = cfg.get("ref_id")
 
     tmp_path = None
-    if ref_audio_b64:
+    if ref_id:
+        with _ref_cache_lock:
+            tmp_path = _ref_cache.get(ref_id)
+    if not tmp_path and ref_audio_b64:
         try:
             content = base64.b64decode(ref_audio_b64)
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 f.write(content)
                 tmp_path = f.name
+            # cache for reuse
+            if ref_id:
+                with _ref_cache_lock:
+                    _ref_cache[ref_id] = tmp_path
         except Exception as e:
             await ws.send_text(json.dumps({"type": "error", "message": f"Invalid ref_audio_b64: {e}"}))
             await ws.close()

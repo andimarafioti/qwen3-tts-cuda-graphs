@@ -616,6 +616,7 @@ let activeTab       = 'clone';
 let genMode         = 'stream';
 let refFile         = null;
 let refB64          = null;
+let refId           = null;
 let busy            = false;
 let loadedModelName = null;
 let useWebSocket    = true;
@@ -732,12 +733,17 @@ function dzPick(e) { const f = e.target.files[0]; if (f) setRef(f); }
 function setRef(f) {
   refFile = f;
   refB64 = null;
+  refId = null;
   document.getElementById('dzName').textContent = '✓ ' + f.name;
   const reader = new FileReader();
   reader.onload = () => {
     const res = reader.result || '';
     const parts = res.split(',');
     refB64 = parts.length > 1 ? parts[1] : null;
+    if (refB64) {
+      // lightweight id for cache key
+      refId = 'ref_' + refB64.length + '_' + (refB64.slice(0, 12));
+    }
   };
   reader.readAsDataURL(f);
 }
@@ -1231,6 +1237,7 @@ async function runStreaming(fd) {
         top_k: fd.get('top_k'),
         repetition_penalty: fd.get('repetition_penalty'),
         ref_audio_b64: null,
+        ref_id: refId,
       };
       if (refB64) {
         payload.ref_audio_b64 = refB64;
