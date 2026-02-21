@@ -532,6 +532,11 @@
         <div class="mhint">prompt build</div>
       </div>
       <div class="mbox">
+        <div class="mlabel">Server Wall</div>
+        <div class="mval" id="mServerWall">—</div>
+        <div class="mhint">to first chunk</div>
+      </div>
+      <div class="mbox">
         <div class="mlabel">RTF</div>
         <div class="mval" id="mRTF">—</div>
         <div class="mhint">&gt;1× = faster than real-time</div>
@@ -545,6 +550,11 @@
         <div class="mlabel">Buffer</div>
         <div class="mval" id="mBuf">—</div>
         <div class="mhint">queued audio</div>
+      </div>
+      <div class="mbox">
+        <div class="mlabel">Net+Client</div>
+        <div class="mval" id="mNetClient">—</div>
+        <div class="mhint">after server</div>
       </div>
     </div>
 
@@ -590,6 +600,7 @@ let clientT0    = 0;
 let firstChunkAt = null;
 let firstAudioAt = null;
 let lastBufS     = 0;
+let firstServerWall = null;
 
 // Download
 let dlBlob = null;
@@ -797,9 +808,11 @@ function resetMetrics() {
   document.getElementById('mTTFA').innerHTML = '—';
   document.getElementById('mTTFAClient').innerHTML = '—';
   document.getElementById('mVC').innerHTML = '—';
+  document.getElementById('mServerWall').innerHTML = '—';
   document.getElementById('mRTF').innerHTML  = '—';
   document.getElementById('mDur').innerHTML  = '—';
   document.getElementById('mBuf').innerHTML  = '—';
+  document.getElementById('mNetClient').innerHTML = '—';
   const pb = document.getElementById('pbar');
   pb.style.width = ''; pb.classList.add('spin');
   document.getElementById('sdot').className  = 'sdot active';
@@ -823,6 +836,10 @@ function pushMetrics(ttfa_ms, rtf, audio_s, vc_ms) {
 
 function pushClientMetrics() {
   if (clientT0) {
+    if (firstServerWall != null) {
+      document.getElementById('mServerWall').innerHTML =
+        Math.round(firstServerWall) + '<span class="munit">ms</span>';
+    }
     if (firstAudioAt != null) {
       const ms = firstAudioAt - clientT0;
       document.getElementById('mTTFAClient').innerHTML =
@@ -830,6 +847,11 @@ function pushClientMetrics() {
     } else if (firstChunkAt != null) {
       const ms = firstChunkAt - clientT0;
       document.getElementById('mTTFAClient').innerHTML =
+        Math.round(ms) + '<span class="munit">ms</span>';
+    }
+    if (firstChunkAt != null && firstServerWall != null) {
+      const ms = (firstChunkAt - clientT0) - firstServerWall;
+      document.getElementById('mNetClient').innerHTML =
         Math.round(ms) + '<span class="munit">ms</span>';
     }
   }
@@ -961,6 +983,7 @@ async function runStreaming(fd) {
   firstChunkAt = null;
   firstAudioAt = null;
   lastBufS = 0;
+  firstServerWall = null;
 
   const res = await fetch('/generate/stream', { method: 'POST', body: fd });
   if (!res.ok) {
@@ -986,6 +1009,11 @@ async function runStreaming(fd) {
 
       if (d.type === 'chunk') {
         if (!audioInited) { initAudio(d.sample_rate); audioInited = true; }
+        if (firstChunkAt == null) {
+          firstChunkAt = performance.now();
+          if (d.elapsed_ms != null) firstServerWall = d.elapsed_ms;
+          pushClientMetrics();
+        }
         pushMetrics(d.ttfa_ms, d.rtf, d.total_audio_s, d.voice_clone_ms);
         enqueueChunk(d.audio_b64);
 
