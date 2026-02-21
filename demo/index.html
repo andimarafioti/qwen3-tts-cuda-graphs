@@ -645,6 +645,8 @@ let dlBlob = null;
 // ─── Init ─────────────────────────────────────────────────────────────────────
 window.addEventListener('load', () => {
   fetchStatus();
+  // Pre-warm audio graph to avoid first-run latency.
+  setTimeout(() => { warmAudio(); }, 0);
 });
 
 async function fetchStatus() {
@@ -732,8 +734,27 @@ function setRef(f) {
 // WAV bytes avoids per-chunk resampling boundary artifacts. AudioContext runs at
 // the model's native 12 kHz so the browser resamples one continuous stream
 // to the device rate rather than each chunk independently.
+async function warmAudio() {
+  if (actx) return;
+  await initAudio(12000);
+}
+
 async function initAudio(sr) {
-  if (actx) { try { actx.close(); } catch {} }
+  if (actx) {
+    initAudioAt = performance.now();
+    rawPcmSr = sr || rawPcmSr;
+    pcmQueue = [];
+    rawPcmParts = [];
+    chunkQ = Promise.resolve();
+    dlBlob = null;
+    firstChunkAt = null;
+    firstAudioAt = null;
+    lastBufS = 0;
+    pendingChunks = [];
+    workletReady = !!workletNode;
+    pushClientMetrics();
+    return;
+  }
   initAudioAt = performance.now();
   rawPcmSr    = sr || 12000;
   actx        = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: rawPcmSr });
