@@ -158,8 +158,10 @@ async def generate_stream(
             t0 = time.perf_counter()
             first_chunk_t = None
             total_audio_s = 0.0
+            voice_clone_ms = 0.0
 
             if mode == "voice_clone":
+                vc_t0 = time.perf_counter()
                 gen = model.generate_voice_clone_streaming(
                     text=text,
                     language=language,
@@ -170,6 +172,7 @@ async def generate_stream(
                     top_k=top_k,
                     repetition_penalty=repetition_penalty,
                 )
+                voice_clone_ms = (time.perf_counter() - vc_t0) * 1000
             else:
                 gen = model.generate_voice_design_streaming(
                     text=text,
@@ -202,6 +205,7 @@ async def generate_stream(
                     "audio_b64": _to_wav_b64(audio_chunk, sr),
                     "sample_rate": sr,
                     "ttfa_ms": round(ttfa_ms),
+                    "voice_clone_ms": round(voice_clone_ms),
                     "rtf": round(rtf, 3),
                     "total_audio_s": round(total_audio_s, 3),
                     "elapsed_ms": round(time.perf_counter() - t0, 3) * 1000,
@@ -212,6 +216,7 @@ async def generate_stream(
             done_payload = {
                 "type": "done",
                 "ttfa_ms": round(ttfa_ms) if ttfa_ms else 0,
+                "voice_clone_ms": round(voice_clone_ms),
                 "rtf": round(rtf, 3),
                 "total_audio_s": round(total_audio_s, 3),
                 "total_ms": round((time.perf_counter() - t0) * 1000),

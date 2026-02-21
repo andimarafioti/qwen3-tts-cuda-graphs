@@ -527,6 +527,11 @@
         <div class="mhint">first sound heard</div>
       </div>
       <div class="mbox">
+        <div class="mlabel">Voice Clone</div>
+        <div class="mval" id="mVC">—</div>
+        <div class="mhint">prompt build</div>
+      </div>
+      <div class="mbox">
         <div class="mlabel">RTF</div>
         <div class="mval" id="mRTF">—</div>
         <div class="mhint">&gt;1× = faster than real-time</div>
@@ -791,6 +796,7 @@ function buildWav() {
 function resetMetrics() {
   document.getElementById('mTTFA').innerHTML = '—';
   document.getElementById('mTTFAClient').innerHTML = '—';
+  document.getElementById('mVC').innerHTML = '—';
   document.getElementById('mRTF').innerHTML  = '—';
   document.getElementById('mDur').innerHTML  = '—';
   document.getElementById('mBuf').innerHTML  = '—';
@@ -800,10 +806,13 @@ function resetMetrics() {
   document.getElementById('stext').textContent = 'Generating…';
 }
 
-function pushMetrics(ttfa_ms, rtf, audio_s) {
+function pushMetrics(ttfa_ms, rtf, audio_s, vc_ms) {
   if (ttfa_ms != null)
     document.getElementById('mTTFA').innerHTML =
       Math.round(ttfa_ms) + '<span class="munit">ms</span>';
+  if (vc_ms != null)
+    document.getElementById('mVC').innerHTML =
+      Math.round(vc_ms) + '<span class="munit">ms</span>';
   if (rtf != null)
     document.getElementById('mRTF').innerHTML =
       rtf.toFixed(2) + '<span class="munit">×</span>';
@@ -977,11 +986,11 @@ async function runStreaming(fd) {
 
       if (d.type === 'chunk') {
         if (!audioInited) { initAudio(d.sample_rate); audioInited = true; }
-        pushMetrics(d.ttfa_ms, d.rtf, d.total_audio_s);
+        pushMetrics(d.ttfa_ms, d.rtf, d.total_audio_s, d.voice_clone_ms);
         enqueueChunk(d.audio_b64);
 
       } else if (d.type === 'done') {
-        pushMetrics(d.ttfa_ms, d.rtf, d.total_audio_s);
+        pushMetrics(d.ttfa_ms, d.rtf, d.total_audio_s, d.voice_clone_ms);
         // Wait for all chunks to be scheduled before marking done
         await chunkQ;
         setDone();
