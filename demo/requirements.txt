@@ -1,0 +1,5 @@
+# Additional dependencies for the demo server
+# The main faster-qwen3-tts package must be installed separately (pip install -e .)
+fastapi>=0.100.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.7

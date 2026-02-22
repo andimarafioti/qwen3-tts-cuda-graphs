@@ -1,0 +1,1428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Faster Qwen3-TTS</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:           #080808;
+      --surface:      #101010;
+      --surface2:     #161616;
+      --border:       #1d1d1d;
+      --border2:      #2a2a2a;
+      --text:         #e2e2e2;
+      --dim:          #5a5a5a;
+      --dimmer:       #303030;
+      --accent:       #06b6d4;
+      --accent-bg:    rgba(6, 182, 212, 0.08);
+      --accent-ring:  rgba(6, 182, 212, 0.22);
+      --green:        #10b981;
+      --amber:        #f59e0b;
+      --red:          #ef4444;
+    }
+    :root[data-theme="light"] {
+      --bg:           #f6f7fb;
+      --surface:      #ffffff;
+      --surface2:     #f3f4f6;
+      --border:       #e6e8ef;
+      --border2:      #d6dae6;
+      --text:         #10131a;
+      --dim:          #6b7280;
+      --dimmer:       #9aa3b2;
+      --accent:       #0ea5e9;
+      --accent-bg:    rgba(14, 165, 233, 0.12);
+      --accent-ring:  rgba(14, 165, 233, 0.25);
+      --green:        #10b981;
+      --amber:        #f59e0b;
+      --red:          #ef4444;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      line-height: 1.55;
+      min-height: 100vh;
+      padding: 32px 16px 80px;
+    }
+
+    .wrap { max-width: 660px; margin: 0 auto; }
+
+    /* ── Header ── */
+    .hdr { margin-bottom: 28px; }
+    .hdr-top { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+    .hdr-top .spacer { flex: 1; }
+    .btn-theme {
+      font-size: 11px; padding: 5px 10px;
+      background: transparent; border: 1px solid var(--border2);
+      border-radius: 999px; color: var(--dim); cursor: pointer;
+      font-family: inherit; transition: all 0.15s;
+    }
+    .btn-theme:hover { border-color: var(--accent); color: var(--accent); }
+    .hdr h1 {
+      font-size: 20px; font-weight: 600; letter-spacing: -0.4px; color: #f0f0f0;
+    }
+    .badge {
+      font-size: 10px; font-weight: 600; letter-spacing: 0.8px;
+      background: var(--accent-bg); color: var(--accent);
+      border: 1px solid var(--accent-ring);
+      padding: 2px 7px; border-radius: 100px;
+    }
+    .hdr p { font-size: 13px; color: var(--dim); }
+
+    /* ── Model bar ── */
+    .model-bar {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 12px;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+      margin-bottom: 14px;
+    }
+    .model-bar label { font-size: 11px; color: var(--dim); white-space: nowrap; }
+    #modelSelect {
+      flex: 1; background: transparent; border: none; color: var(--text);
+      font-size: 13px; font-family: inherit; outline: none; cursor: pointer;
+    }
+    #modelSelect option { background: #1a1a1a; }
+    :root[data-theme="light"] #modelSelect option { background: #ffffff; }
+    .model-pill {
+      display: flex; align-items: center; gap: 5px;
+      font-size: 11px; color: var(--dim); white-space: nowrap;
+    }
+    .mdot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--dimmer); flex-shrink: 0;
+      transition: background 0.3s;
+    }
+    .mdot.loaded  { background: var(--green); }
+    .mdot.loading { background: var(--amber); animation: blink 0.7s infinite; }
+    .mdot.error   { background: var(--red); }
+
+    /* ── Card ── */
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 20px; margin-bottom: 10px;
+    }
+
+    /* ── Tabs ── */
+    .tabs {
+      display: flex; gap: 0; margin-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+    }
+    .tab {
+      padding: 7px 14px; font-size: 13px; font-weight: 500;
+      color: var(--dim); cursor: pointer;
+      border-bottom: 2px solid transparent; margin-bottom: -1px;
+      transition: color 0.15s, border-color 0.15s;
+      user-select: none;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
+
+    /* ── Fields ── */
+    .field { margin-bottom: 14px; }
+    .field > label {
+      display: block; font-size: 11px; font-weight: 500;
+      color: var(--dim); margin-bottom: 5px;
+      text-transform: uppercase; letter-spacing: 0.6px;
+    }
+    textarea, input[type="text"] {
+      width: 100%; background: var(--surface2);
+      border: 1px solid var(--border); border-radius: 7px;
+      color: var(--text); font-size: 14px; font-family: inherit;
+      padding: 9px 11px; resize: vertical; outline: none;
+      transition: border-color 0.15s;
+    }
+    textarea:focus, input[type="text"]:focus { border-color: var(--border2); }
+    textarea::placeholder, input::placeholder { color: var(--dimmer); }
+
+    .note {
+      font-size: 12px; color: var(--dimmer);
+      margin-top: -6px; margin-bottom: 8px;
+    }
+
+    .record-row {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      margin-top: 8px;
+    }
+    .rec-status {
+      font-size: 12px; color: var(--dim);
+    }
+    .rec-preview {
+      width: 100%; margin-top: 6px;
+    }
+
+    /* ── Dropzone ── */
+    .dropzone {
+      position: relative; border: 1.5px dashed var(--border2);
+      border-radius: 8px; padding: 22px 16px; text-align: center;
+      background: var(--surface2); cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .dropzone:hover, .dropzone.over {
+      border-color: var(--accent); background: var(--accent-bg);
+    }
+    .dropzone input[type="file"] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer;
+    }
+    .dz-icon { font-size: 22px; margin-bottom: 5px; }
+    .dz-hint { font-size: 12px; color: var(--dim); }
+    .dz-name { font-size: 12px; color: var(--accent); margin-top: 4px; font-weight: 500; }
+
+    /* ── Row ── */
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+
+    /* ── Select ── */
+    select {
+      width: 100%; background: var(--surface2);
+      border: 1px solid var(--border); border-radius: 7px;
+      color: var(--text); font-size: 13px; font-family: inherit;
+      padding: 8px 28px 8px 10px; outline: none; cursor: pointer;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%23555' d='M5 6 0 0h10z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 10px center;
+    }
+    select option { background: #161616; }
+
+    /* ── Mode toggle ── */
+    .toggle {
+      display: flex; background: var(--surface2);
+      border: 1px solid var(--border); border-radius: 7px; padding: 3px;
+    }
+    .toggle-btn {
+      flex: 1; padding: 5px 8px; font-size: 12px; font-weight: 500;
+      text-align: center; cursor: pointer; border-radius: 5px;
+      color: var(--dim); transition: all 0.15s; user-select: none;
+    }
+    .toggle-btn.active {
+      background: var(--surface); color: var(--text);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+    }
+
+    /* ── Slider ── */
+    .slider-wrap { display: flex; align-items: center; gap: 10px; }
+    input[type="range"] {
+      -webkit-appearance: none; flex: 1;
+      height: 3px; background: var(--border2); border-radius: 2px;
+      outline: none; cursor: pointer;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 13px; height: 13px;
+      border-radius: 50%; background: var(--accent);
+      cursor: pointer; transition: transform 0.1s;
+    }
+    input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.25); }
+    .sval {
+      font-size: 11px; font-family: 'SF Mono', 'Fira Code', monospace;
+      color: var(--dim); min-width: 36px; text-align: right;
+    }
+
+    /* ── Collapsible advanced ── */
+    .adv-toggle {
+      display: flex; align-items: center; gap: 5px;
+      font-size: 12px; color: var(--dim); cursor: pointer;
+      user-select: none; margin-top: 6px; width: fit-content;
+    }
+    .adv-toggle:hover { color: var(--text); }
+    .adv-body {
+      display: none; margin-top: 14px; padding-top: 14px;
+      border-top: 1px solid var(--border);
+    }
+    .adv-body.open { display: block; }
+
+    /* ── Generate button ── */
+    .btn-gen {
+      width: 100%; padding: 12px; font-size: 14px; font-weight: 600;
+      font-family: inherit; letter-spacing: -0.2px;
+      background: var(--accent); color: #000; border: none; border-radius: 8px;
+      cursor: pointer; transition: background 0.15s, transform 0.1s;
+    }
+    .btn-gen:hover:not(:disabled) { background: #22d3ee; transform: translateY(-1px); }
+    .btn-gen:active:not(:disabled) { transform: translateY(0); }
+    .btn-gen:disabled {
+      opacity: 0.45; cursor: not-allowed; transform: none;
+      background: var(--surface2); color: var(--dim);
+      border: 1px solid var(--border2);
+    }
+
+    /* ── Small buttons ── */
+    .btn-sm {
+      font-size: 12px; padding: 5px 12px;
+      background: transparent; border: 1px solid var(--border2);
+      border-radius: 6px; color: var(--dim); cursor: pointer;
+      font-family: inherit; transition: all 0.15s; white-space: nowrap;
+    }
+    .btn-sm:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* ── Error ── */
+    .err {
+      display: none; margin-top: 10px; padding: 10px 12px;
+      background: rgba(239,68,68,0.07); border: 1px solid rgba(239,68,68,0.18);
+      border-radius: 8px; color: #fca5a5; font-size: 13px;
+    }
+    .err.show { display: block; }
+
+    /* ── Metrics card ── */
+    .m-card { display: none; }
+    .m-card.show { display: block; }
+
+    .m-header {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 16px;
+      font-size: 11px; font-weight: 600; letter-spacing: 0.8px;
+      text-transform: uppercase; color: var(--dim);
+    }
+    .btn-adv {
+      margin-left: auto;
+      font-size: 10px; padding: 4px 10px;
+      background: transparent; border: 1px solid var(--border2);
+      border-radius: 999px; color: var(--dim); cursor: pointer;
+      font-family: inherit; transition: all 0.15s;
+    }
+    .btn-adv:hover { border-color: var(--accent); color: var(--accent); }
+    .btn-adv.on { border-color: var(--accent); color: var(--accent); }
+    .sdot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--accent); flex-shrink: 0;
+    }
+    .sdot.done   { background: var(--green); }
+    .sdot.error  { background: var(--red); }
+    .sdot.active { animation: blink 0.75s infinite; }
+
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+
+    /* ── Metric grid ── */
+    .mgrid {
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: 1px; background: var(--border); border-radius: 8px;
+      overflow: hidden; margin-bottom: 14px;
+    }
+    .mgrid-adv { display: none; }
+    .mgrid-adv.show { display: grid; }
+    .mbox { background: var(--surface2); padding: 14px 16px; }
+    .mlabel {
+      font-size: 10px; text-transform: uppercase; letter-spacing: 0.9px;
+      color: var(--dim); margin-bottom: 6px;
+    }
+    .mval {
+      font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 26px; font-weight: 600; color: #f0f0f0;
+      letter-spacing: -1.5px; line-height: 1;
+    }
+    .munit { font-size: 12px; color: var(--dim); font-weight: 400; letter-spacing: 0; margin-left: 1px; }
+    .mhint { font-size: 10px; color: var(--dimmer); margin-top: 4px; }
+
+    /* ── Progress bar ── */
+    .ptrack {
+      height: 2px; background: var(--border2); border-radius: 2px;
+      overflow: hidden; margin-bottom: 14px;
+    }
+    .pfill {
+      height: 100%; background: var(--accent); border-radius: 2px;
+      transition: width 0.4s ease; width: 0%;
+    }
+    .pfill.spin {
+      width: 25% !important;
+      animation: sweep 1.4s ease-in-out infinite;
+    }
+    @keyframes sweep {
+      0%   { transform: translateX(-200%); }
+      100% { transform: translateX(500%); }
+    }
+
+    /* ── Wave indicator ── */
+    .wave-row {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 12px; color: var(--dim); margin-bottom: 12px;
+    }
+    .wave-row.hidden { display: none; }
+    .bars { display: flex; align-items: center; gap: 2px; height: 14px; }
+    .bar {
+      width: 2px; border-radius: 1px; background: var(--accent);
+      animation: wavebar 0.7s ease-in-out infinite;
+    }
+    .bar:nth-child(1) { height: 4px;  animation-delay: 0s;    }
+    .bar:nth-child(2) { height: 8px;  animation-delay: 0.10s; }
+    .bar:nth-child(3) { height: 13px; animation-delay: 0.20s; }
+    .bar:nth-child(4) { height: 8px;  animation-delay: 0.30s; }
+    .bar:nth-child(5) { height: 4px;  animation-delay: 0.40s; }
+    @keyframes wavebar { 0%,100%{transform:scaleY(0.35)} 50%{transform:scaleY(1)} }
+
+    /* ── Audio section ── */
+    .audio-wrap { display: none; }
+    .audio-wrap.show { display: block; }
+    audio {
+      width: 100%; border-radius: 6px; margin-bottom: 8px;
+      /* minimal consistent look across browsers */
+      filter: invert(0);
+    }
+    .audio-row { display: flex; justify-content: flex-end; gap: 8px; }
+
+    /* ── Chunk size row (streaming only) ── */
+    #chunkRow { display: none; }
+    #chunkRow.show { display: block; }
+
+    /* ── RTF hint ── */
+    .rtf-hint {
+      font-size: 11px; color: var(--dimmer); text-align: center;
+      margin-top: -8px; margin-bottom: 4px;
+    }
+
+    /* ── Switch model prompt ── */
+    .switch-prompt {
+      display: none; margin-top: 10px; padding: 12px 14px;
+      background: rgba(245,158,11,0.07); border: 1px solid rgba(245,158,11,0.2);
+      border-radius: 8px; font-size: 13px; color: #fcd34d;
+      align-items: center; gap: 10px; flex-wrap: wrap;
+    }
+    .switch-prompt.show { display: flex; }
+    .switch-prompt code {
+      background: rgba(245,158,11,0.12); padding: 1px 6px; border-radius: 4px;
+      font-size: 12px; color: #fde68a;
+    }
+    .switch-prompt .sp-btns { display: flex; gap: 6px; margin-left: auto; }
+    .btn-switch {
+      font-size: 12px; padding: 5px 12px; border-radius: 6px; cursor: pointer;
+      font-family: inherit; border: none; font-weight: 500;
+      background: rgba(245,158,11,0.2); color: #fcd34d;
+      transition: background 0.15s;
+    }
+    .btn-switch:hover { background: rgba(245,158,11,0.35); }
+    .btn-cancel-sw {
+      font-size: 12px; padding: 5px 10px; border-radius: 6px; cursor: pointer;
+      font-family: inherit; border: 1px solid var(--border2);
+      background: transparent; color: var(--dim); transition: all 0.15s;
+    }
+    .btn-cancel-sw:hover { color: var(--text); border-color: var(--border2); }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Header -->
+  <header class="hdr">
+    <div class="hdr-top">
+      <h1>faster-qwen3-tts</h1>
+      <span class="badge">CUDA GRAPHS</span>
+      <span class="spacer"></span>
+      <button class="btn-theme" id="themeToggle" onclick="toggleTheme()">Dark</button>
+    </div>
+    <p>Real-time TTS — watch TTFA and RTF update live as audio streams to your speakers</p>
+  </header>
+
+  <!-- Model bar -->
+  <div class="model-bar">
+    <label>Model</label>
+    <select id="modelSelect">
+      <option value="Qwen/Qwen3-TTS-12Hz-0.6B-Base">0.6B Base</option>
+      <option value="Qwen/Qwen3-TTS-12Hz-1.7B-Base">1.7B Base</option>
+      <option value="Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice">0.6B CustomVoice</option>
+      <option value="Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice">1.7B CustomVoice</option>
+      <option value="Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign">1.7B VoiceDesign</option>
+    </select>
+    <div class="model-pill">
+      <div class="mdot" id="mdot"></div>
+      <span id="mtext">not loaded</span>
+    </div>
+    <button class="btn-sm" id="loadBtn" onclick="loadModel()">Load</button>
+  </div>
+
+  <!-- Main form card -->
+  <div class="card">
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <div class="tab active" id="tabClone" onclick="switchTab('clone')">Voice Clone</div>
+      <div class="tab" id="tabCustom" onclick="switchTab('custom')">Custom Voice</div>
+      <div class="tab" id="tabDesign" onclick="switchTab('design')">Voice Design</div>
+    </div>
+
+    <!-- Voice Clone pane -->
+    <div class="tab-pane active" id="paneClone">
+      <div class="field">
+        <label>Text</label>
+        <textarea id="cloneText" rows="4"
+          placeholder="Enter text to synthesize…">Hello! This is faster Qwen3-TTS running with CUDA graph capture. Notice how the audio starts playing almost immediately — that's the time-to-first-audio advantage of streaming inference.</textarea>
+      </div>
+      <div class="field">
+        <label>Reference Audio <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--dimmer)">— drop a short WAV clip of the target voice</span></label>
+        <div class="dropzone" id="dz"
+          ondragover="dzOver(event)" ondragleave="dzLeave(event)" ondrop="dzDrop(event)">
+          <input type="file" id="refAudio" accept=".wav,.mp3,.flac,.ogg" onchange="dzPick(event)">
+          <div class="dz-icon">🎙</div>
+          <div class="dz-hint">Drop a WAV here, record, or click to browse</div>
+          <div class="dz-name" id="dzName"></div>
+        </div>
+        <div class="record-row">
+          <button class="btn-sm" id="recBtn" onclick="startRecording()">Record</button>
+          <button class="btn-sm" id="stopBtn" onclick="stopRecording()" disabled>Stop</button>
+          <span class="rec-status" id="recStatus">Not recording</span>
+        </div>
+        <div class="note">Recording requires microphone permission (HTTPS or localhost).</div>
+        <audio id="recPreview" class="rec-preview" controls></audio>
+      </div>
+      <div class="field">
+        <label>Clone Mode</label>
+        <div class="toggle">
+          <div class="toggle-btn active" id="xvecOnlyOn" onclick="setXvecOnly(true)">x-vector only</div>
+          <div class="toggle-btn" id="xvecOnlyOff" onclick="setXvecOnly(false)">full ICL</div>
+        </div>
+      </div>
+      <div class="note">x-vector only is faster and does not require a transcript. Full ICL may better match prosody but can add latency.</div>
+      <div class="field" id="refTextField">
+        <label>Reference Transcript</label>
+        <textarea id="refText" rows="2"
+          placeholder="Transcription of the reference audio clip…"></textarea>
+      </div>
+    </div>
+
+    <!-- Custom Voice pane -->
+    <div class="tab-pane" id="paneCustom">
+      <div class="field">
+        <label>Text</label>
+        <textarea id="customText" rows="4"
+          placeholder="Enter text to synthesize…">Welcome! This is a custom voice from the model's built-in speaker library.</textarea>
+      </div>
+      <div class="field">
+        <label>Speaker ID</label>
+        <select id="speakerId">
+          <option value="">Select a speaker…</option>
+        </select>
+        <div class="note" id="speakerHint">Load a CustomVoice model to populate speakers.</div>
+        <div class="note" id="speakerDesc"></div>
+      </div>
+      <div class="field">
+        <label>Voice Instruction (optional)</label>
+        <textarea id="customInstruct" rows="2"
+          placeholder="e.g. a calm, neutral narrator…"></textarea>
+      </div>
+      <p style="font-size:12px;color:var(--dimmer);margin-top:-8px;margin-bottom:6px">
+        Requires a <code style="color:var(--dim)">CustomVoice</code> model.
+      </p>
+    </div>
+
+    <!-- Voice Design pane -->
+    <div class="tab-pane" id="paneDesign">
+      <div class="field">
+        <label>Text</label>
+        <textarea id="designText" rows="4"
+          placeholder="Enter text to synthesize…">Welcome! This demonstration shows voice design — describe any voice and the model will synthesize speech in that style, streamed in real time with CUDA graphs.</textarea>
+      </div>
+      <div class="field">
+        <label>Voice Instruction</label>
+        <textarea id="instruct" rows="2"
+          placeholder="e.g. A warm, confident female voice with a slight British accent…">A warm, calm narrator with a clear and engaging delivery.</textarea>
+      </div>
+      <p style="font-size:12px;color:var(--dimmer);margin-top:-8px;margin-bottom:6px">
+        Requires the <code style="color:var(--dim)">1.7B-VoiceDesign</code> model.
+      </p>
+    </div>
+
+    <!-- Common options row -->
+    <div class="row2" style="margin-top:4px">
+      <div class="field">
+        <label>Language</label>
+        <select id="language">
+          <option>English</option>
+          <option>Chinese</option>
+          <option>French</option>
+          <option>German</option>
+          <option>Spanish</option>
+          <option>Auto</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Generation Mode</label>
+        <div class="toggle">
+          <div class="toggle-btn active" id="modeStream" onclick="setMode('stream')">Streaming</div>
+          <div class="toggle-btn" id="modeNon" onclick="setMode('non')">Non-streaming</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chunk size (streaming only) -->
+    <div id="chunkRow" class="field show">
+      <label>
+        Chunk Size
+        <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--dimmer)">— smaller = lower TTFA, higher overhead</span>
+      </label>
+      <div class="slider-wrap">
+        <input type="range" id="chunkSize" min="1" max="24" value="8"
+          oninput="sv(this,'chunkVal')">
+        <span class="sval" id="chunkVal">8</span>
+      </div>
+    </div>
+
+    <!-- Advanced -->
+    <div class="adv-toggle" onclick="toggleAdv()">
+      <span id="advArr">▸</span> Advanced
+    </div>
+    <div class="adv-body" id="advBody">
+      <div class="row3">
+        <div class="field">
+          <label>Temperature</label>
+          <div class="slider-wrap">
+            <input type="range" id="temperature" min="0.1" max="2.0" step="0.05" value="0.9"
+              oninput="sv(this,'tempVal')">
+            <span class="sval" id="tempVal">0.9</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>Top-K</label>
+          <div class="slider-wrap">
+            <input type="range" id="topK" min="1" max="100" value="50"
+              oninput="sv(this,'topKVal')">
+            <span class="sval" id="topKVal">50</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>Rep. Penalty</label>
+          <div class="slider-wrap">
+            <input type="range" id="repPenalty" min="1.0" max="1.5" step="0.01" value="1.05"
+              oninput="sv(this,'rpVal')">
+            <span class="sval" id="rpVal">1.05</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /card -->
+
+  <button class="btn-gen" id="genBtn" onclick="generate()">Generate</button>
+  <div class="switch-prompt" id="switchPrompt">
+    <span id="switchMsg"></span>
+    <div class="sp-btns">
+      <button class="btn-switch" id="switchBtn">Load it &amp; generate</button>
+      <button class="btn-cancel-sw" onclick="dismissSwitch()">Cancel</button>
+    </div>
+  </div>
+  <div class="err" id="errMsg"></div>
+
+  <!-- Metrics card -->
+  <div class="card m-card" id="mCard">
+
+  <div class="m-header">
+    <div class="sdot active" id="sdot"></div>
+    <span id="stext">Generating…</span>
+    <button class="btn-adv" id="metricsAdvBtn" onclick="toggleMetricsAdv()">Advanced</button>
+  </div>
+
+    <div class="mgrid">
+      <div class="mbox">
+        <div class="mlabel">Model TTFA</div>
+        <div class="mval" id="mTTFA">—</div>
+        <div class="mhint">time to first audio</div>
+      </div>
+      <div class="mbox">
+        <div class="mlabel">Client TTFA</div>
+    <div class="mval" id="mTTFAClient">—</div>
+    <div class="mhint">first sound heard</div>
+      </div>
+      <div class="mbox">
+        <div class="mlabel">Model RTF</div>
+        <div class="mval" id="mRTF">—</div>
+        <div class="mhint">&gt;1× = faster than real-time</div>
+      </div>
+    </div>
+
+    <div class="mgrid mgrid-adv" id="mgridAdv">
+      <div class="mbox">
+        <div class="mlabel">Audio Path</div>
+        <div class="mval" id="mAudioPath">—</div>
+        <div class="mhint">ScriptProcessor</div>
+      </div>
+      <div class="mbox">
+        <div class="mlabel">Voice Clone</div>
+        <div class="mval" id="mVC">—</div>
+        <div class="mhint">prompt build</div>
+      </div>
+      <div class="mbox">
+        <div class="mlabel">Server Wall</div>
+        <div class="mval" id="mServerWall">—</div>
+        <div class="mhint">to first chunk</div>
+      </div>
+      <div class="mbox">
+        <div class="mlabel">Generated</div>
+        <div class="mval" id="mDur">—</div>
+        <div class="mhint">total audio duration</div>
+      </div>
+      <div class="mbox">
+        <div class="mlabel">Buffer</div>
+  <div class="mval" id="mBuf">—</div>
+    <div class="mhint">queued audio</div>
+      </div>
+      <div class="mbox">
+        <div class="mlabel">Net+Client</div>
+    <div class="mval" id="mNetClient">—</div>
+    <div class="mhint">after server</div>
+  </div>
+    </div>
+
+    <div class="ptrack"><div class="pfill spin" id="pbar"></div></div>
+
+    <div class="wave-row" id="waveRow">
+      <div class="bars">
+        <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+        <div class="bar"></div><div class="bar"></div>
+      </div>
+      <span>Streaming audio…</span>
+    </div>
+
+    <!-- Audio replay / download (shown after done) -->
+    <div class="audio-wrap" id="audioWrap">
+      <audio id="player" controls></audio>
+      <div class="audio-row">
+        <button class="btn-sm" onclick="dlAudio()">↓ Download WAV</button>
+      </div>
+    </div>
+
+  </div><!-- /metrics card -->
+
+</div><!-- /wrap -->
+
+<script>
+// ─── State ────────────────────────────────────────────────────────────────────
+let activeTab       = 'clone';
+let genMode         = 'stream';
+let refFile         = null;
+let busy            = false;
+let loadedModelName = null;
+let loadedModelType = null;
+let xvecOnly        = true;
+const defaultSpeakers = [
+  { id: 'Vivian', lang: 'Chinese', desc: 'Bright, slightly edgy young female voice.' },
+  { id: 'Serena', lang: 'Chinese', desc: 'Warm, gentle young female voice.' },
+  { id: 'Uncle_Fu', lang: 'Chinese', desc: 'Seasoned male voice with a low, mellow timbre.' },
+  { id: 'Dylan', lang: 'Chinese (Beijing)', desc: 'Youthful Beijing male voice with a clear, natural timbre.' },
+  { id: 'Eric', lang: 'Chinese (Sichuan)', desc: 'Lively Chengdu male voice with a slightly husky brightness.' },
+  { id: 'Ryan', lang: 'English', desc: 'Dynamic male voice with strong rhythmic drive.' },
+  { id: 'Aiden', lang: 'English', desc: 'Sunny American male voice with a clear midrange.' },
+  { id: 'Ono_Anna', lang: 'Japanese', desc: 'Playful Japanese female voice with a light, nimble timbre.' },
+  { id: 'Sohee', lang: 'Korean', desc: 'Warm Korean female voice with rich emotion.' },
+];
+
+// Web Audio
+let actx        = null;
+let pcmQueue    = [];
+let sproc       = null;
+let rawPcmParts = [];     // raw int16 bytes from server (for download WAV)
+let rawPcmSr    = 24000;
+let chunkQ      = Promise.resolve();
+let clientT0    = 0;
+let firstChunkAt = null;
+let firstAudioAt = null;
+let lastBufS     = 0;
+let firstServerWall = null;
+
+// Recording
+let recStream = null;
+let recorder = null;
+let recChunks = [];
+
+// Download
+let dlBlob = null;
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+window.addEventListener('load', () => {
+  initTheme();
+  fetchStatus();
+  setXvecOnly(true);
+  // Pre-warm audio graph to avoid first-run latency.
+  setTimeout(() => { warmAudio(); }, 0);
+  // Ensure warmup runs after a user gesture (autoplay policies).
+  const _warmOnce = () => { warmAudio(); window.removeEventListener('pointerdown', _warmOnce); };
+  window.addEventListener('pointerdown', _warmOnce, { passive: true });
+});
+
+async function fetchStatus(opts = {}) {
+  try {
+    const d = await fetch('/status').then(r => r.json());
+    if (d.model) {
+      loadedModelName = d.model;
+      loadedModelType = d.model_type || null;
+      const sel = document.getElementById('modelSelect');
+      for (const o of sel.options) { if (o.value === d.model) { o.selected = true; break; } }
+    }
+    if (opts.skipSpeakers !== true) {
+      updateSpeakers(d.speakers || []);
+    }
+    setModelPill(d.loaded ? 'loaded' : 'off', d.model ? 'ready' : 'not loaded');
+  } catch { setModelPill('off', 'offline'); }
+}
+
+function initTheme() {
+  const t = localStorage.getItem('theme') || 'dark';
+  applyTheme(t);
+}
+
+function applyTheme(theme) {
+  const root = document.documentElement;
+  root.dataset.theme = theme;
+  const btn = document.getElementById('themeToggle');
+  if (btn) btn.textContent = theme === 'dark' ? 'Dark' : 'Light';
+  localStorage.setItem('theme', theme);
+}
+
+function toggleTheme() {
+  const current = document.documentElement.dataset.theme || 'dark';
+  applyTheme(current === 'dark' ? 'light' : 'dark');
+}
+
+// ─── Model ────────────────────────────────────────────────────────────────────
+async function loadModel() {
+  const modelId = document.getElementById('modelSelect').value;
+  const btn = document.getElementById('loadBtn');
+  btn.disabled = true; btn.textContent = 'Loading…';
+  setModelPill('loading', 'loading…');
+
+  try {
+    const fd = new FormData();
+    fd.append('model_id', modelId);
+    const d = await fetch('/load', { method: 'POST', body: fd }).then(r => r.json());
+    if (d.status === 'loaded' || d.status === 'already_loaded') {
+      loadedModelName = modelId;
+      setModelPill('loaded', 'ready');
+      await fetchStatus({ skipSpeakers: true });
+    } else {
+      setModelPill('error', 'failed');
+    }
+  } catch (e) {
+    setModelPill('error', 'error');
+  }
+  btn.disabled = false; btn.textContent = 'Load';
+}
+
+function setModelPill(state, label) {
+  const dot = document.getElementById('mdot');
+  dot.className = 'mdot ' + state;
+  document.getElementById('mtext').textContent = label;
+}
+
+// ─── Tabs ─────────────────────────────────────────────────────────────────────
+function switchTab(t) {
+  activeTab = t;
+  document.getElementById('tabClone').classList.toggle('active', t === 'clone');
+  document.getElementById('tabCustom').classList.toggle('active', t === 'custom');
+  document.getElementById('tabDesign').classList.toggle('active', t === 'design');
+  document.getElementById('paneClone').classList.toggle('active', t === 'clone');
+  document.getElementById('paneCustom').classList.toggle('active', t === 'custom');
+  document.getElementById('paneDesign').classList.toggle('active', t === 'design');
+  if (t === 'custom') refreshSpeakers();
+}
+
+function setXvecOnly(v) {
+  xvecOnly = v;
+  document.getElementById('xvecOnlyOn').classList.toggle('active', v);
+  document.getElementById('xvecOnlyOff').classList.toggle('active', !v);
+  const refField = document.getElementById('refTextField');
+  if (refField) refField.style.display = v ? 'none' : 'block';
+}
+
+// ─── Mode toggle ──────────────────────────────────────────────────────────────
+function setMode(m) {
+  genMode = m;
+  document.getElementById('modeStream').classList.toggle('active', m === 'stream');
+  document.getElementById('modeNon').classList.toggle('active', m === 'non');
+  document.getElementById('chunkRow').classList.toggle('show', m === 'stream');
+}
+
+// ─── Slider helper ────────────────────────────────────────────────────────────
+function sv(el, id) { document.getElementById(id).textContent = el.value; }
+
+// ─── Advanced toggle ──────────────────────────────────────────────────────────
+function toggleAdv() {
+  const open = document.getElementById('advBody').classList.toggle('open');
+  document.getElementById('advArr').textContent = open ? '▾' : '▸';
+}
+
+function toggleMetricsAdv() {
+  const grid = document.getElementById('mgridAdv');
+  const btn = document.getElementById('metricsAdvBtn');
+  const open = grid.classList.toggle('show');
+  btn.classList.toggle('on', open);
+}
+
+function updateSpeakers(speakers) {
+  const sel = document.getElementById('speakerId');
+  const hint = document.getElementById('speakerHint');
+  const desc = document.getElementById('speakerDesc');
+  if (!sel || !hint) return;
+  const prev = sel.value;
+  sel.innerHTML = '<option value=\"\">Select a speaker…</option>';
+  let list = [];
+  if (Array.isArray(speakers)) list = speakers;
+  else if (speakers && typeof speakers === 'object') list = Object.keys(speakers);
+  if (!list || list.length === 0) {
+    list = defaultSpeakers.map(s => s.id);
+  }
+  if (prev && !list.includes(prev)) {
+    list = [prev, ...list];
+  }
+  list.forEach((spk) => {
+    const opt = document.createElement('option');
+    opt.value = spk;
+    opt.textContent = spk;
+    sel.appendChild(opt);
+  });
+  if (prev && list.includes(prev)) sel.value = prev;
+  if (!list || list.length === 0) {
+    hint.textContent = 'Load a CustomVoice model to populate speakers.';
+  } else {
+    hint.textContent = `Loaded ${list.length} speakers.`;
+  }
+  if (desc) desc.textContent = '';
+  sel.onchange = () => {
+    if (!desc) return;
+    const item = defaultSpeakers.find(s => s.id === sel.value);
+    desc.textContent = item ? `${item.lang} — ${item.desc}` : '';
+  };
+}
+
+async function refreshSpeakers() {
+  try {
+    const d = await fetch('/status').then(r => r.json());
+    updateSpeakers(d.speakers || []);
+  } catch {
+    updateSpeakers([]);
+  }
+}
+
+// ─── Dropzone ─────────────────────────────────────────────────────────────────
+function dzOver(e) { e.preventDefault(); document.getElementById('dz').classList.add('over'); }
+function dzLeave()  { document.getElementById('dz').classList.remove('over'); }
+function dzDrop(e) {
+  e.preventDefault(); dzLeave();
+  const f = e.dataTransfer.files[0]; if (f) setRef(f);
+}
+function dzPick(e) { const f = e.target.files[0]; if (f) setRef(f); }
+function setRef(f) {
+  refFile = f;
+  document.getElementById('dzName').textContent = '✓ ' + f.name;
+}
+
+async function startRecording() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showErr('Recording is not supported in this browser.');
+    return;
+  }
+  hideErr();
+  document.getElementById('recBtn').disabled = true;
+  document.getElementById('stopBtn').disabled = false;
+  document.getElementById('recStatus').textContent = 'Recording…';
+
+  try {
+    recChunks = [];
+    recStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : 'audio/webm';
+    recorder = new MediaRecorder(recStream, { mimeType: mime });
+    recorder.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
+    recorder.onstop = async () => {
+      const blob = new Blob(recChunks, { type: recorder.mimeType });
+      const wavBlob = await blobToWav(blob);
+      const file = new File([wavBlob], 'recorded.wav', { type: 'audio/wav' });
+      setRef(file);
+      const preview = document.getElementById('recPreview');
+      preview.src = URL.createObjectURL(wavBlob);
+      preview.play().catch(() => {});
+      cleanupRecording();
+    };
+    recorder.start();
+  } catch (e) {
+    showErr('Recording failed: ' + e.message);
+    cleanupRecording();
+  }
+}
+
+function stopRecording() {
+  if (recorder && recorder.state !== 'inactive') recorder.stop();
+}
+
+function cleanupRecording() {
+  if (recStream) recStream.getTracks().forEach(t => t.stop());
+  recStream = null;
+  recorder = null;
+  document.getElementById('recBtn').disabled = false;
+  document.getElementById('stopBtn').disabled = true;
+  document.getElementById('recStatus').textContent = 'Recorded';
+}
+
+async function blobToWav(blob) {
+  const ab = await blob.arrayBuffer();
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const audioBuf = await ctx.decodeAudioData(ab);
+  const wav = audioBufferToWav(audioBuf);
+  await ctx.close();
+  return wav;
+}
+
+function audioBufferToWav(buffer) {
+  const numCh = buffer.numberOfChannels;
+  const length = buffer.length;
+  const sr = buffer.sampleRate;
+  const pcm = new Float32Array(length);
+
+  for (let c = 0; c < numCh; c++) {
+    const data = buffer.getChannelData(c);
+    for (let i = 0; i < length; i++) pcm[i] += data[i] / numCh;
+  }
+
+  const ab = new ArrayBuffer(44 + length * 2);
+  const v = new DataView(ab);
+  const ws = (o, s) => [...s].forEach((ch, i) => v.setUint8(o + i, ch.charCodeAt(0)));
+
+  ws(0, 'RIFF'); v.setUint32(4, 36 + length * 2, true);
+  ws(8, 'WAVE'); ws(12, 'fmt ');
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true);
+  v.setUint32(28, sr * 2, true);
+  v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true);
+  ws(36, 'data'); v.setUint32(40, length * 2, true);
+
+  let off = 44;
+  for (let i = 0; i < length; i++, off += 2) {
+    let s = Math.max(-1, Math.min(1, pcm[i]));
+    v.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return new Blob([ab], { type: 'audio/wav' });
+}
+
+// ─── Web Audio: gapless streaming via ScriptProcessor + raw PCM ───────────────
+// Skips decodeAudioData entirely — parsing int16 PCM directly from the server's
+// WAV bytes avoids per-chunk resampling boundary artifacts. AudioContext runs at
+// the model's native 12 kHz so the browser resamples one continuous stream
+// to the device rate rather than each chunk independently.
+async function warmAudio() {
+  if (actx) return;
+  try {
+    await initAudio(24000);
+  } catch (e) {
+    console.warn('Audio warmup failed (will retry on generate):', e);
+  }
+}
+
+async function initAudio(sr) {
+  rawPcmSr    = sr || 24000;
+  if (actx) {
+    document.getElementById('mAudioPath').innerHTML = 'ScriptProcessor';
+    pcmQueue = [];
+    rawPcmParts = [];
+    chunkQ = Promise.resolve();
+    dlBlob = null;
+    if (!clientT0) clientT0 = performance.now();
+    firstChunkAt = null;
+    firstAudioAt = null;
+    lastBufS = 0;
+    if (actx.state === 'suspended') await actx.resume();
+    pushClientMetrics();
+    return;
+  }
+  actx        = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: rawPcmSr });
+  pcmQueue    = [];
+  rawPcmParts = [];
+  chunkQ      = Promise.resolve();
+  dlBlob      = null;
+  if (!clientT0) clientT0 = performance.now();
+  firstChunkAt = null;
+  firstAudioAt = null;
+  lastBufS     = 0;
+
+  document.getElementById('mAudioPath').innerHTML = 'ScriptProcessor';
+  sproc = actx.createScriptProcessor(256, 0, 1);
+  sproc.onaudioprocess = e => {
+    const out = e.outputBuffer.getChannelData(0);
+    let i = 0;
+    let wrote = false;
+    while (i < out.length) {
+      if (!pcmQueue.length) { out.fill(0, i); break; }
+      const seg  = pcmQueue[0];
+      const take = Math.min(out.length - i, seg.data.length - seg.pos);
+      out.set(seg.data.subarray(seg.pos, seg.pos + take), i);
+      seg.pos += take;
+      i       += take;
+      wrote = true;
+      if (seg.pos >= seg.data.length) pcmQueue.shift();
+    }
+    if (wrote && firstAudioAt == null) {
+      firstAudioAt = performance.now();
+      pushClientMetrics();
+    }
+  };
+  if (actx.state === 'suspended') await actx.resume();
+  sproc.connect(actx.destination);
+  pushClientMetrics();
+}
+
+
+// Parse a WAV Uint8Array → {pcm: Float32Array, rawPcm: Uint8Array, sr: number}
+function parseWav(bytes) {
+  const v  = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const sr = v.getUint32(24, true);
+  let off  = 12;
+  while (off + 8 <= bytes.length) {
+    const id   = String.fromCharCode(bytes[off], bytes[off+1], bytes[off+2], bytes[off+3]);
+    const size = v.getUint32(off + 4, true);
+    if (id === 'data') {
+      const rawPcm = bytes.slice(off + 8, off + 8 + size);
+      const i16    = new Int16Array(rawPcm.buffer, rawPcm.byteOffset, rawPcm.byteLength / 2);
+      const f32    = new Float32Array(i16.length);
+      for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768.0;
+      return { pcm: f32, rawPcm, sr };
+    }
+    off += 8 + size;
+  }
+  return null;
+}
+
+function enqueueChunk(b64wav) {
+  chunkQ = chunkQ.then(() => _processChunk(b64wav));
+}
+
+function _processChunk(b64wav) {
+  if (!actx) return;
+  const bytes  = Uint8Array.from(atob(b64wav), c => c.charCodeAt(0));
+  const parsed = parseWav(bytes);
+  if (!parsed) return;
+
+  rawPcmParts.push(parsed.rawPcm);
+  pcmQueue.push({ data: parsed.pcm, pos: 0 });
+  if (firstChunkAt == null) {
+    firstChunkAt = performance.now();
+    pushClientMetrics();
+  }
+  lastBufS = pcmQueue.reduce((s, seg) => s + (seg.data.length - seg.pos), 0) / rawPcmSr;
+  pushClientMetrics();
+
+  // ScriptProcessor pulls from pcmQueue.
+}
+
+// Build download WAV from raw server bytes — exact 12 kHz model output, no resampling
+function buildWav() {
+  if (!rawPcmParts.length) return null;
+  const totalPcm = rawPcmParts.reduce((s, p) => s + p.length, 0);
+  const ab  = new ArrayBuffer(44 + totalPcm);
+  const v   = new DataView(ab);
+  const ws  = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+
+  ws(0,  'RIFF'); v.setUint32(4,  36 + totalPcm, true);
+  ws(8,  'WAVE'); ws(12, 'fmt ');
+  v.setUint32(16, 16, true);
+  v.setUint16(20,  1, true);           // PCM
+  v.setUint16(22,  1, true);           // mono
+  v.setUint32(24, rawPcmSr, true);
+  v.setUint32(28, rawPcmSr * 2, true);
+  v.setUint16(32,  2, true);
+  v.setUint16(34, 16, true);
+  ws(36, 'data'); v.setUint32(40, totalPcm, true);
+
+  const out = new Uint8Array(ab, 44);
+  let offset = 0;
+  for (const part of rawPcmParts) { out.set(part, offset); offset += part.length; }
+
+  return new Blob([ab], { type: 'audio/wav' });
+}
+
+// ─── Metrics helpers ─────────────────────────────────────────────────────────
+function resetMetrics() {
+  document.getElementById('mAudioPath').innerHTML = '—';
+  document.getElementById('mTTFA').innerHTML = '—';
+  document.getElementById('mTTFAClient').innerHTML = '—';
+  document.getElementById('mVC').innerHTML = '—';
+  document.getElementById('mServerWall').innerHTML = '—';
+  document.getElementById('mRTF').innerHTML  = '—';
+  document.getElementById('mDur').innerHTML  = '—';
+  document.getElementById('mBuf').innerHTML  = '—';
+  document.getElementById('mNetClient').innerHTML = '—';
+  const pb = document.getElementById('pbar');
+  pb.style.width = ''; pb.classList.add('spin');
+  document.getElementById('sdot').className  = 'sdot active';
+  document.getElementById('stext').textContent = 'Generating…';
+}
+
+function pushMetrics(ttfa_ms, rtf, audio_s, vc_ms) {
+  if (ttfa_ms != null)
+    document.getElementById('mTTFA').innerHTML =
+      Math.round(ttfa_ms) + '<span class="munit">ms</span>';
+  if (vc_ms != null)
+    document.getElementById('mVC').innerHTML =
+      Math.round(vc_ms) + '<span class="munit">ms</span>';
+  if (rtf != null)
+    document.getElementById('mRTF').innerHTML =
+      rtf.toFixed(2) + '<span class="munit">×</span>';
+  if (audio_s != null)
+    document.getElementById('mDur').innerHTML =
+      audio_s.toFixed(1) + '<span class="munit">s</span>';
+}
+
+function pushClientMetrics() {
+  if (clientT0) {
+    if (firstServerWall != null) {
+      document.getElementById('mServerWall').innerHTML =
+        Math.round(firstServerWall) + '<span class="munit">ms</span>';
+    }
+    if (firstAudioAt != null) {
+      const ms = firstAudioAt - clientT0;
+      document.getElementById('mTTFAClient').innerHTML =
+        Math.round(ms) + '<span class="munit">ms</span>';
+    } else if (firstChunkAt != null) {
+      const ms = firstChunkAt - clientT0;
+      document.getElementById('mTTFAClient').innerHTML =
+        Math.round(ms) + '<span class="munit">ms</span>';
+    }
+    if (firstChunkAt != null && firstServerWall != null) {
+      const ms = (firstChunkAt - clientT0) - firstServerWall;
+      document.getElementById('mNetClient').innerHTML =
+        Math.round(ms) + '<span class="munit">ms</span>';
+    }
+  }
+  if (lastBufS != null) {
+    document.getElementById('mBuf').innerHTML =
+      lastBufS.toFixed(2) + '<span class="munit">s</span>';
+  }
+}
+
+function setDone() {
+  document.getElementById('sdot').className = 'sdot done';
+  document.getElementById('stext').textContent = 'Done';
+  const pb = document.getElementById('pbar');
+  pb.classList.remove('spin'); pb.style.width = '100%';
+}
+
+function setErr() {
+  document.getElementById('sdot').className = 'sdot error';
+  document.getElementById('stext').textContent = 'Error';
+  const pb = document.getElementById('pbar');
+  pb.classList.remove('spin'); pb.style.width = '0%';
+}
+
+function setPlayer(blob) {
+  dlBlob = blob;
+  const url = URL.createObjectURL(blob);
+  const player = document.getElementById('player');
+  player.src = url;
+  document.getElementById('audioWrap').classList.add('show');
+}
+
+// ─── Switch-model prompt ───────────────────────────────────────────────────────
+function showSwitchPrompt(html, targetModel) {
+  document.getElementById('switchMsg').innerHTML = html;
+  document.getElementById('switchBtn').onclick = () => switchAndGenerate(targetModel);
+  document.getElementById('switchPrompt').classList.add('show');
+}
+
+async function switchAndGenerate(targetModel) {
+  if (busy) return;
+  busy = true;
+  const btn = document.getElementById('genBtn');
+  btn.disabled = true;
+  btn.textContent = 'Loading model…';
+  document.getElementById('modelSelect').value = targetModel;
+  dismissSwitch();
+  try {
+    await loadModel();
+  } finally {
+    busy = false;
+  }
+  btn.disabled = false;
+  btn.textContent = 'Generate';
+  await generate();
+}
+
+function dismissSwitch() {
+  document.getElementById('switchPrompt').classList.remove('show');
+}
+
+// ─── Generate ─────────────────────────────────────────────────────────────────
+async function generate() {
+  if (busy) return;
+
+  const isVoiceDesign = loadedModelName && loadedModelName.includes('VoiceDesign');
+  const isCustom = loadedModelName && loadedModelName.includes('CustomVoice');
+
+  if (activeTab === 'design' && loadedModelName && !isVoiceDesign) {
+    showSwitchPrompt(
+      'Voice Design requires the <code>1.7B-VoiceDesign</code> model.',
+      'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
+    );
+    return;
+  }
+  if (activeTab === 'custom' && loadedModelName && !isCustom) {
+    showSwitchPrompt(
+      'Custom Voice requires a <code>CustomVoice</code> model.',
+      'Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice',
+    );
+    return;
+  }
+  if (activeTab === 'clone' && loadedModelName && (isVoiceDesign || isCustom)) {
+    showSwitchPrompt(
+      'Voice Clone is not supported by VoiceDesign or CustomVoice models. Switch to a Base model?',
+      'Qwen/Qwen3-TTS-12Hz-0.6B-Base',
+    );
+    return;
+  }
+  dismissSwitch();
+
+  if (activeTab === 'clone' && !refFile) {
+    showErr('Please upload a reference audio file first.'); return;
+  }
+  if (activeTab === 'custom' && !document.getElementById('speakerId').value.trim()) {
+    showErr('Please choose a speaker ID first.'); return;
+  }
+  hideErr();
+  busy = true;
+
+  const btn = document.getElementById('genBtn');
+  btn.disabled = true; btn.textContent = 'Generating…';
+
+  document.getElementById('mCard').classList.add('show');
+  document.getElementById('audioWrap').classList.remove('show');
+  document.getElementById('waveRow').classList.remove('hidden');
+  resetMetrics();
+
+  const fd = new FormData();
+  fd.append('language', document.getElementById('language').value);
+  fd.append('temperature', document.getElementById('temperature').value);
+  fd.append('top_k', document.getElementById('topK').value);
+  fd.append('repetition_penalty', document.getElementById('repPenalty').value);
+
+  if (activeTab === 'clone') {
+    fd.append('text', document.getElementById('cloneText').value);
+    fd.append('mode', 'voice_clone');
+    fd.append('ref_text', xvecOnly ? '' : document.getElementById('refText').value);
+    if (refFile) fd.append('ref_audio', refFile);
+    fd.append('xvec_only', xvecOnly ? 'true' : 'false');
+  } else if (activeTab === 'custom') {
+    fd.append('text', document.getElementById('customText').value);
+    fd.append('mode', 'custom');
+    fd.append('speaker', document.getElementById('speakerId').value.trim());
+    fd.append('instruct', document.getElementById('customInstruct').value);
+  } else {
+    fd.append('text', document.getElementById('designText').value);
+    fd.append('mode', 'voice_design');
+    fd.append('instruct', document.getElementById('instruct').value);
+  }
+
+  try {
+    if (genMode === 'stream') {
+      fd.append('chunk_size', document.getElementById('chunkSize').value);
+      await runStreaming(fd);
+    } else {
+      await runNonStreaming(fd);
+    }
+  } catch (e) {
+    showErr('Generation failed: ' + e.message);
+    setErr();
+  }
+
+  busy = false;
+  btn.disabled = false; btn.textContent = 'Generate';
+}
+
+async function runStreaming(fd) {
+  document.getElementById('waveRow').classList.remove('hidden');
+  clientT0 = performance.now();
+  firstChunkAt = null;
+  firstAudioAt = null;
+  lastBufS = 0;
+  firstServerWall = null;
+
+  const res = await fetch('/generate/stream', { method: 'POST', body: fd });
+  if (!res.ok) {
+    const e = await res.json();
+    throw new Error(e.detail || 'Request failed');
+  }
+
+  const reader  = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let audioInited = false;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop();
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const d = JSON.parse(line.slice(6));
+
+      if (d.type === 'chunk') {
+        if (!audioInited) { await initAudio(d.sample_rate); audioInited = true; }
+        if (firstChunkAt == null) {
+          firstChunkAt = performance.now();
+          if (d.elapsed_ms != null) firstServerWall = d.elapsed_ms;
+          pushClientMetrics();
+        }
+        pushMetrics(d.ttfa_ms, d.rtf, d.total_audio_s, d.voice_clone_ms);
+        enqueueChunk(d.audio_b64);
+
+      } else if (d.type === 'done') {
+        pushMetrics(d.ttfa_ms, d.rtf, d.total_audio_s, d.voice_clone_ms);
+        // Wait for all chunks to be scheduled before marking done
+        await chunkQ;
+        setDone();
+        document.getElementById('waveRow').classList.add('hidden');
+        // Build full WAV for replay/download
+        const blob = buildWav();
+        if (blob) setPlayer(blob);
+
+      } else if (d.type === 'error') {
+        throw new Error(d.message);
+      }
+    }
+  }
+}
+
+async function runNonStreaming(fd) {
+  document.getElementById('waveRow').classList.add('hidden');
+
+  const res = await fetch('/generate', { method: 'POST', body: fd });
+  if (!res.ok) {
+    const e = await res.json();
+    throw new Error(e.detail || 'Request failed');
+  }
+  const d = await res.json();
+  const m = d.metrics;
+
+  // For non-streaming, TTFA == total time (no chunks)
+  pushMetrics(m.total_ms, m.rtf, m.audio_duration_s);
+  setDone();
+
+  const bytes = Uint8Array.from(atob(d.audio_b64), c => c.charCodeAt(0));
+  const blob  = new Blob([bytes], { type: 'audio/wav' });
+  setPlayer(blob);
+  document.getElementById('player').play();
+}
+
+// ─── Download ─────────────────────────────────────────────────────────────────
+function dlAudio() {
+  if (!dlBlob) return;
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(dlBlob),
+    download: 'generated_speech.wav',
+  });
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// ─── Error display ────────────────────────────────────────────────────────────
+function showErr(msg) {
+  const el = document.getElementById('errMsg');
+  el.textContent = msg; el.classList.add('show');
+}
+function hideErr() { document.getElementById('errMsg').classList.remove('show'); }
+</script>
+</body>
+</html>
