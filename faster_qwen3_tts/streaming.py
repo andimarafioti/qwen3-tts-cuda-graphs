@@ -15,58 +15,6 @@ from .sampling import apply_repetition_penalty, sample_logits
 from .talker_graph import TalkerGraph
 
 
-def _predict_codebooks_eager(
-    predictor,
-    pred_input: torch.Tensor,
-    *,
-    num_codebooks: int,
-    do_sample: bool,
-    top_k: int,
-    top_p: float,
-    temperature: float,
-) -> torch.Tensor:
-    """Eager (non-graph) predictor loop for 15 codebooks."""
-    out = predictor.forward(
-        inputs_embeds=pred_input,
-        use_cache=True,
-        return_dict=True,
-    )
-    logits = out.logits[:, -1, :]
-    tok = sample_logits(
-        logits,
-        temperature=temperature,
-        top_k=top_k,
-        top_p=top_p,
-        do_sample=do_sample,
-    )
-
-    tokens = [tok]
-    past = out.past_key_values
-    generation_steps = out.generation_steps
-
-    for _ in range(1, num_codebooks):
-        out = predictor.forward(
-            input_ids=tok.view(1, 1),
-            past_key_values=past,
-            use_cache=True,
-            return_dict=True,
-            generation_steps=generation_steps,
-        )
-        logits = out.logits[:, -1, :]
-        tok = sample_logits(
-            logits,
-            temperature=temperature,
-            top_k=top_k,
-            top_p=top_p,
-            do_sample=do_sample,
-        )
-        tokens.append(tok)
-        past = out.past_key_values
-        generation_steps = out.generation_steps
-
-    return torch.stack(tokens)
-
-
 @torch.inference_mode()
 def fast_generate_streaming(
     talker,
@@ -94,7 +42,6 @@ def fast_generate_streaming(
     The final chunk may be shorter than chunk_size.
     """
     eos_id = config.codec_eos_token_id
-    num_code_groups = config.num_code_groups
     vocab_size = config.vocab_size
     device = talker_input_embeds.device
 
@@ -104,10 +51,6 @@ def fast_generate_streaming(
         if i != eos_id:
             suppress_mask[i] = True
 
-    predictor = talker.code_predictor
-    talker_codec_embed = talker.get_input_embeddings()
-    talker_codec_head = talker.codec_head
-    predictor_codec_embeds = predictor.get_input_embeddings()
 
     # === PREFILL (still uses HF forward for variable-length prefill) ===
     t_start = time.time()
@@ -327,40 +270,16 @@ def parity_generate_streaming(
         if token.item() == eos_id:
             break
 
-        last_id_hidden = talker_codec_embed(token.unsqueeze(1))
-        pred_input = torch.cat((past_hidden, last_id_hidden), dim=1)
-        codebook_token_ids = _predict_codebooks_eager(
-            predictor,
-            pred_input,
-            num_codebooks=num_code_groups - 1,
-            do_sample=do_sample,
-            top_k=top_k,
-            top_p=top_p,
-            temperature=temperature,
-        )
-
-        all_cb = torch.cat([token.view(1), codebook_token_ids])
-        chunk_buffer.append(all_cb.detach())
-        all_first_tokens.append(token.detach())
-
-        codec_hiddens = [last_id_hidden]
-        for i in range(num_code_groups - 1):
-            codec_hiddens.append(predictor_codec_embeds[i](codebook_token_ids[i].unsqueeze(0).unsqueeze(0)))
-        inputs_embeds = torch.cat(codec_hiddens, dim=1).sum(1, keepdim=True)
-
-        if gen_step < trailing_text_hiddens.shape[1]:
-            inputs_embeds = inputs_embeds + trailing_text_hiddens[:, gen_step].unsqueeze(1)
-        else:
-            inputs_embeds = inputs_embeds + tts_pad_embed
-
+        cache_position = None
         if attention_mask is not None:
             attention_mask = torch.cat(
                 [attention_mask, attention_mask.new_ones((attention_mask.shape[0], 1))],
                 dim=1,
             )
+            cache_position = torch.tensor([attention_mask.shape[1] - 1], device=attention_mask.device)
 
         out = talker.forward(
-            inputs_embeds=inputs_embeds,
+            input_ids=token.view(1, 1),
             attention_mask=attention_mask,
             use_cache=True,
             output_hidden_states=True,
@@ -370,7 +289,19 @@ def parity_generate_streaming(
             generation_step=gen_step,
             past_hidden=past_hidden,
             past_key_values=talker_past_kv,
+            subtalker_dosample=do_sample,
+            subtalker_top_k=top_k,
+            subtalker_top_p=top_p,
+            subtalker_temperature=temperature,
+            cache_position=cache_position,
         )
+
+        codec_ids = out.hidden_states[1]
+        if codec_ids is None:
+            break
+
+        chunk_buffer.append(codec_ids.squeeze(0).detach())
+        all_first_tokens.append(token.detach())
 
         logits = out.logits[:, -1, :]
         if repetition_penalty != 1.0 and all_first_tokens:

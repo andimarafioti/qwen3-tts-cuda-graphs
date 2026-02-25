@@ -126,7 +126,7 @@ class PredictorGraph:
         # First codebook: logits from last position
         logits = self.lm_heads[0](h[:, -1:, :])  # [1, 1, vocab]
         tok = sample_logits(
-            logits,
+            logits[:, 0, :],
             temperature=self.temperature,
             top_k=self.top_k,
             top_p=self.top_p,
@@ -152,7 +152,7 @@ class PredictorGraph:
 
             logits = self.lm_heads[cb_idx](h[:, -1:, :])
             tok = sample_logits(
-                logits,
+                logits[:, 0, :],
                 temperature=self.temperature,
                 top_k=self.top_k,
                 top_p=self.top_p,
