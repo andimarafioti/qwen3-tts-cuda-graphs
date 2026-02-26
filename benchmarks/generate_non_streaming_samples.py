@@ -18,10 +18,26 @@ PROMPTS = [
     "Tomorrow is the first day of spring, so I'm taking a long walk and bringing a notebook to write down ideas.",
 ]
 
+TRANSCRIPTS_PATH = PROJECT_DIR / "samples" / "parity" / "icl_transcripts.txt"
+
+
+def load_transcripts():
+    transcripts = {}
+    if not TRANSCRIPTS_PATH.exists():
+        return transcripts
+    for line in TRANSCRIPTS_PATH.read_text(encoding="utf-8").splitlines():
+        if ":" not in line:
+            continue
+        key_part, text = line.split(":", 1)
+        key = key_part.split("(")[0].strip()
+        transcripts[key] = text.strip()
+    return transcripts
+
+
 REFS = [
-    ("ref_audio", PROJECT_DIR / "ref_audio.wav", "Your job is to teach the model how you speak in a calm, steady voice."),
-    ("ref_audio_2", PROJECT_DIR / "ref_audio_2.wav", "I wish I had more time to slow down and enjoy the small moments."),
-    ("ref_audio_3", PROJECT_DIR / "ref_audio_3.wav", "The city was quiet at sunrise, and I could hear birds between the buildings."),
+    ("ref_audio", PROJECT_DIR / "ref_audio.wav"),
+    ("ref_audio_2", PROJECT_DIR / "ref_audio_2.wav"),
+    ("ref_audio_3", PROJECT_DIR / "ref_audio_3.wav"),
 ]
 
 MAX_NEW_TOKENS = int(os.environ.get("MAX_NEW_TOKENS", "168"))
@@ -48,7 +64,10 @@ def main():
         max_seq_len=2048,
     )
 
-    for ref_idx, (ref_key, ref_path, ref_text) in enumerate(REFS):
+    transcripts = load_transcripts()
+
+    for ref_idx, (ref_key, ref_path) in enumerate(REFS):
+        ref_text = transcripts.get(ref_key, "")
         for prompt_idx, prompt in enumerate(PROMPTS):
             seed = 1337 + ref_idx * 10 + prompt_idx
             for mode in (False, True):

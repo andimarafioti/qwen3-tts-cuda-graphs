@@ -18,6 +18,11 @@ This folder compares **non_streaming_mode=True** vs **False** for ICL voice clon
 - `ref_audio_2.wav`
 - `ref_audio_3.wav`
 
+**Reference transcripts (used for ICL)**
+- ref_audio: "I'm confused why some people have super short timelines, yet at the same time are bullish on scaling up reinforcement learning atop LLMs. If we're actually close to a human-like learner, then this whole approach of training on verifiable outcomes is doomed."
+- ref_audio_2: "when to leave and where to go. It's not Shakespeare. It does not speak in memorable lines. My inner voice always gives it to me straight,"
+- ref_audio_3: "Don't be deceived by the name. There is nothing cuddly about this particular teddy bear. In fact, it's the most dangerous plant in the desert."
+
 **Prompts**
 1. "I left the window open last night, and the rain made a soft rhythm on the roof while I tried to sleep."
 2. "Tomorrow is the first day of spring, so I'm taking a long walk and bringing a notebook to write down ideas."
