@@ -537,7 +537,7 @@ class FasterQwen3TTS:
         do_sample: bool = True,
         repetition_penalty: float = 1.05,
         xvec_only: bool = True,
-        non_streaming_mode: bool = False,
+        non_streaming_mode: bool = True,
         append_silence: bool = True,
     ) -> Tuple[list, int]:
         """
@@ -558,7 +558,7 @@ class FasterQwen3TTS:
             xvec_only: When True (default), use only the speaker embedding for voice cloning.
                 This prevents phoneme bleed-through from the reference and allows clean
                 language switching. Set to False for full ICL mode (reference audio in context).
-            non_streaming_mode: Match upstream non-streaming prompt layout. Default False (official behavior).
+            non_streaming_mode: Match upstream non-streaming prompt layout. Default True for better non-streaming quality.
 
         Returns:
             Tuple of ([audio_waveform], sample_rate)
