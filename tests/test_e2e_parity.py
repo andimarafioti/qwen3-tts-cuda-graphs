@@ -596,3 +596,44 @@ def test_voice_clone_icl_prefix_parity_fast_path(parity_fixture):
     assert upstream_codes.shape[0] > 0 and fast_codes_cpu.shape[0] > 0
     # StaticCache fast path diverges quickly for ICL; enforce only step-0 parity here.
     assert torch.equal(upstream_codes[0], fast_codes_cpu[0])
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for ICL parity test.")
+def test_icl_build_talker_inputs_outside_inference_mode(parity_fixture):
+    """Regression test: _build_talker_inputs_local must work with ICL ref_code tensors
+    even when called outside of torch.inference_mode().
+
+    create_voice_clone_prompt() runs under @torch.inference_mode(), producing inference
+    tensors. Without the .clone() fix these tensors trigger a RuntimeError when passed
+    to nn.Embedding outside an inference_mode context.
+    """
+    base = parity_fixture["base"]
+    fast = parity_fixture["fast"]
+
+    ref_audio = "ref_audio.wav"
+    ref_text = "A short reference transcript."
+    text = "Short parity test."
+
+    prompt_items = base.create_voice_clone_prompt(
+        ref_audio=ref_audio,
+        ref_text=ref_text,
+        x_vector_only_mode=False,
+    )
+    vcp = base._prompt_items_to_voice_clone_prompt(prompt_items)
+    assert vcp["ref_code"][0] is not None and vcp["ref_code"][0].is_inference(), (
+        "pre-condition: ref_code must be an inference tensor for this test to be meaningful"
+    )
+
+    input_ids = fast.model._tokenize_texts([fast.model._build_assistant_text(text)])
+    ref_ids = [base._tokenize_texts([base._build_ref_text(ref_text)])[0]]
+
+    # Must NOT be wrapped in torch.inference_mode() — that is the scenario that used to crash.
+    fast._build_talker_inputs_local(
+        m=fast.model.model,
+        input_ids=input_ids,
+        ref_ids=ref_ids,
+        voice_clone_prompt=vcp,
+        languages=["English"],
+        speakers=None,
+        non_streaming_mode=False,
+    )
