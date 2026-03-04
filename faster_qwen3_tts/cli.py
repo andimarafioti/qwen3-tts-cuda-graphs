@@ -23,7 +23,7 @@ def _load_model(model_id: str, device: str, dtype: str):
         model_id,
         device=device,
         dtype=torch_dtype,
-        attn_implementation="eager",
+        attn_implementation="sdpa",
         max_seq_len=2048,
     )
 

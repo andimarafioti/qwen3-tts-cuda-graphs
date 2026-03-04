@@ -8,7 +8,7 @@ include = ["faster_qwen3_tts*"]
 
 [project]
 name = "faster-qwen3-tts"
-version = "0.2.3"
+version = "0.2.4"
 description = "Real-time Qwen3-TTS inference using manual CUDA graph capture"
 readme = "README.md"
 license = { text = "MIT" }

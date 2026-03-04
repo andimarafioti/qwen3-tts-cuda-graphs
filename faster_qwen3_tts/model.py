@@ -52,17 +52,17 @@ class FasterQwen3TTS:
         model_name: str,
         device: str = "cuda",
         dtype: Union[str, torch.dtype] = torch.bfloat16,
-        attn_implementation: str = "eager",
+        attn_implementation: str = "sdpa",
         max_seq_len: int = 2048,
     ):
         """
         Load Qwen3-TTS model and prepare CUDA graphs.
-        
+
         Args:
             model_name: Model path or HuggingFace Hub ID
             device: Device to use ("cuda" or "cpu")
             dtype: Data type for inference
-            attn_implementation: Attention implementation (use "eager" on Jetson)
+            attn_implementation: Attention implementation ("sdpa" or "flash_attention_2")
             max_seq_len: Maximum sequence length for static cache
             
         Returns:
