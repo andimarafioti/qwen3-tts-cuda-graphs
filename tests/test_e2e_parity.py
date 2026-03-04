@@ -1,3 +1,4 @@
+import gc
 import os
 import random
 
@@ -149,9 +150,14 @@ def _assert_codes_match(upstream_codes, fast_codes_cpu, label=""):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FIXTURES
+#
+# scope="class" ensures each fixture is torn down (models deleted, GPU memory
+# freed) before the next class's fixture is set up.  With scope="module" all
+# fixtures stay alive until the end of the module, causing 8 model instances to
+# accumulate in GPU memory simultaneously and triggering OOM on 24 GB GPUs.
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="class")
 def parity_fixture():
     """bfloat16 xvec-only fixture.
 
@@ -208,7 +214,7 @@ def parity_fixture():
         fast.predictor_graph.temperature = 1.0
         fast._warmup(tie.shape[1])
 
-    return dict(
+    data = dict(
         base=base,
         fast=fast,
         vcp=vcp,
@@ -219,9 +225,14 @@ def parity_fixture():
         tth=tth,
         tpe=tpe,
     )
+    yield data
+    del data["base"]
+    del data["fast"]
+    torch.cuda.empty_cache()
+    gc.collect()
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="class")
 def parity_fixture_fp32():
     """float32 + TF32-off fixture for hardware-portable exact parity tests.
 
@@ -282,7 +293,7 @@ def parity_fixture_fp32():
         fast.predictor_graph.temperature = 1.0
         fast._warmup(tie.shape[1])
 
-    yield dict(
+    data = dict(
         base=base,
         fast=fast,
         vcp=vcp,
@@ -293,12 +304,16 @@ def parity_fixture_fp32():
         tth=tth,
         tpe=tpe,
     )
-
+    yield data
+    del data["base"]
+    del data["fast"]
     torch.backends.cuda.matmul.allow_tf32 = prev_matmul
     torch.backends.cudnn.allow_tf32 = prev_cudnn
+    torch.cuda.empty_cache()
+    gc.collect()
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="class")
 def custom_voice_fixture():
     _seed_all(0)
 
@@ -328,7 +343,7 @@ def custom_voice_fixture():
         instruct=None,
     )
 
-    return dict(
+    data = dict(
         base=base,
         fast=fast,
         speaker=speaker,
@@ -340,9 +355,14 @@ def custom_voice_fixture():
         tth=tth,
         tpe=tpe,
     )
+    yield data
+    del data["base"]
+    del data["fast"]
+    torch.cuda.empty_cache()
+    gc.collect()
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="class")
 def voice_design_fixture():
     _seed_all(0)
 
@@ -369,7 +389,7 @@ def voice_design_fixture():
         instruct=instruct,
     )
 
-    return dict(
+    data = dict(
         base=base,
         fast=fast,
         language=language,
@@ -381,6 +401,11 @@ def voice_design_fixture():
         tth=tth,
         tpe=tpe,
     )
+    yield data
+    del data["base"]
+    del data["fast"]
+    torch.cuda.empty_cache()
+    gc.collect()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -399,160 +424,160 @@ def voice_design_fixture():
 # differences no longer flip any argmax for the test phrase.
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for parity test.")
-def test_voice_clone_token_parity_xvec_only(parity_fixture_fp32):
-    """xvec-only fast path (CUDA graph + StaticCache) must exactly match upstream.
+class TestFP32Parity:
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for parity test.")
+    def test_voice_clone_token_parity_xvec_only(self, parity_fixture_fp32):
+        """xvec-only fast path (CUDA graph + StaticCache) must exactly match upstream.
 
-    In float32 with TF32 off, the fast and upstream paths produce identical
-    token sequences for the test phrase despite using structurally different
-    attention caches.  This test is portable across GPU architectures.
-    """
-    from faster_qwen3_tts.generate import fast_generate
+        In float32 with TF32 off, the fast and upstream paths produce identical
+        token sequences for the test phrase despite using structurally different
+        attention caches.  This test is portable across GPU architectures.
+        """
+        from faster_qwen3_tts.generate import fast_generate
 
-    f = parity_fixture_fp32
-    base, fast = f["base"], f["fast"]
-    vcp = f["vcp"]
+        f = parity_fixture_fp32
+        base, fast = f["base"], f["fast"]
+        vcp = f["vcp"]
 
-    assert torch.equal(f["input_ids_base"][0].cpu(), f["input_ids_fast"][0].cpu())
+        assert torch.equal(f["input_ids_base"][0].cpu(), f["input_ids_fast"][0].cpu())
 
-    fast_codes, _ = fast_generate(
-        talker=fast.model.model.talker,
-        talker_input_embeds=f["tie"],
-        attention_mask=f["tam"],
-        trailing_text_hiddens=f["tth"],
-        tts_pad_embed=f["tpe"],
-        config=fast.model.model.config.talker_config,
-        predictor_graph=fast.predictor_graph,
-        talker_graph=fast.talker_graph,
-        max_new_tokens=_MAX_NEW_TOKENS,
-        min_new_tokens=0,
-        do_sample=False,
-        top_k=0,
-        top_p=1.0,
-        temperature=1.0,
-        repetition_penalty=1.0,
-    )
-
-    talker_codes_list, _ = base.model.generate(
-        input_ids=f["input_ids_base"],
-        ref_ids=[None],
-        voice_clone_prompt=vcp,
-        languages=["English"],
-        non_streaming_mode=False,
-        do_sample=False,
-        top_k=0,
-        top_p=1.0,
-        temperature=1.0,
-        repetition_penalty=1.0,
-        max_new_tokens=_MAX_NEW_TOKENS,
-        min_new_tokens=0,
-        subtalker_dosample=False,
-        subtalker_top_k=0,
-        subtalker_top_p=1.0,
-        subtalker_temperature=1.0,
-    )
-
-    upstream_codes = talker_codes_list[0].detach().cpu()
-    fast_codes_cpu = fast_codes.detach().cpu()
-    _assert_codes_match(upstream_codes, fast_codes_cpu, label="xvec_only/fp32")
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for parity test.")
-def test_voice_clone_icl_prefix_parity_fast_path(parity_fixture_fp32):
-    """ICL fast path (CUDA graph + StaticCache) matches upstream in float32.
-
-    ICL voice cloning requires ref_text to match the spoken content exactly — a
-    mismatched transcript breaks the text↔codec alignment and the model loops
-    indefinitely.  We use _ICL_REF_TEXT (the actual transcript of ref_audio.wav)
-    and load audio via _load_ref_audio_with_silence (adds 0.5 s trailing silence,
-    same as the production pipeline) so the model terminates naturally at ~16 tokens.
-
-    In float32 with TF32 disabled the fast and upstream paths produce the same
-    tokens on all tested hardware.  A length difference of ≤1 is tolerated because
-    HF generate injects a fake EOS token when the budget is exhausted and
-    upstream post-processing strips it; with natural termination this does not
-    arise in practice but we keep the tolerance for robustness.
-    """
-    from faster_qwen3_tts.generate import fast_generate
-
-    f = parity_fixture_fp32
-    base, fast = f["base"], f["fast"]
-
-    ref_audio = "ref_audio.wav"
-    text = "Short parity test."
-
-    with torch.inference_mode():
-        ref_audio_input = fast._load_ref_audio_with_silence(ref_audio)
-        prompt_items = base.create_voice_clone_prompt(
-            ref_audio=ref_audio_input,
-            ref_text=_ICL_REF_TEXT,
-            x_vector_only_mode=False,
+        fast_codes, _ = fast_generate(
+            talker=fast.model.model.talker,
+            talker_input_embeds=f["tie"],
+            attention_mask=f["tam"],
+            trailing_text_hiddens=f["tth"],
+            tts_pad_embed=f["tpe"],
+            config=fast.model.model.config.talker_config,
+            predictor_graph=fast.predictor_graph,
+            talker_graph=fast.talker_graph,
+            max_new_tokens=_MAX_NEW_TOKENS,
+            min_new_tokens=0,
+            do_sample=False,
+            top_k=0,
+            top_p=1.0,
+            temperature=1.0,
+            repetition_penalty=1.0,
         )
-        vcp = base._prompt_items_to_voice_clone_prompt(prompt_items)
-        ref_text = prompt_items[0].ref_text
 
-        input_ids_base = base._tokenize_texts([base._build_assistant_text(text)])
-        input_ids_fast = fast.model._tokenize_texts([fast.model._build_assistant_text(text)])
-        ref_ids = [base._tokenize_texts([base._build_ref_text(ref_text)])[0]]
+        talker_codes_list, _ = base.model.generate(
+            input_ids=f["input_ids_base"],
+            ref_ids=[None],
+            voice_clone_prompt=vcp,
+            languages=["English"],
+            non_streaming_mode=False,
+            do_sample=False,
+            top_k=0,
+            top_p=1.0,
+            temperature=1.0,
+            repetition_penalty=1.0,
+            max_new_tokens=_MAX_NEW_TOKENS,
+            min_new_tokens=0,
+            subtalker_dosample=False,
+            subtalker_top_k=0,
+            subtalker_top_p=1.0,
+            subtalker_temperature=1.0,
+        )
 
-        tie, tam, tth, tpe = fast._build_talker_inputs_local(
-            m=fast.model.model,
-            input_ids=input_ids_fast,
+        upstream_codes = talker_codes_list[0].detach().cpu()
+        fast_codes_cpu = fast_codes.detach().cpu()
+        _assert_codes_match(upstream_codes, fast_codes_cpu, label="xvec_only/fp32")
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for parity test.")
+    def test_voice_clone_icl_prefix_parity_fast_path(self, parity_fixture_fp32):
+        """ICL fast path (CUDA graph + StaticCache) matches upstream in float32.
+
+        ICL voice cloning requires ref_text to match the spoken content exactly — a
+        mismatched transcript breaks the text↔codec alignment and the model loops
+        indefinitely.  We use _ICL_REF_TEXT (the actual transcript of ref_audio.wav)
+        and load audio via _load_ref_audio_with_silence (adds 0.5 s trailing silence,
+        same as the production pipeline) so the model terminates naturally at ~16 tokens.
+
+        In float32 with TF32 disabled the fast and upstream paths produce the same
+        tokens on all tested hardware.  A length difference of ≤1 is tolerated because
+        HF generate injects a fake EOS token when the budget is exhausted and
+        upstream post-processing strips it; with natural termination this does not
+        arise in practice but we keep the tolerance for robustness.
+        """
+        from faster_qwen3_tts.generate import fast_generate
+
+        f = parity_fixture_fp32
+        base, fast = f["base"], f["fast"]
+
+        ref_audio = "ref_audio.wav"
+        text = "Short parity test."
+
+        with torch.inference_mode():
+            ref_audio_input = fast._load_ref_audio_with_silence(ref_audio)
+            prompt_items = base.create_voice_clone_prompt(
+                ref_audio=ref_audio_input,
+                ref_text=_ICL_REF_TEXT,
+                x_vector_only_mode=False,
+            )
+            vcp = base._prompt_items_to_voice_clone_prompt(prompt_items)
+            ref_text = prompt_items[0].ref_text
+
+            input_ids_base = base._tokenize_texts([base._build_assistant_text(text)])
+            input_ids_fast = fast.model._tokenize_texts([fast.model._build_assistant_text(text)])
+            ref_ids = [base._tokenize_texts([base._build_ref_text(ref_text)])[0]]
+
+            tie, tam, tth, tpe = fast._build_talker_inputs_local(
+                m=fast.model.model,
+                input_ids=input_ids_fast,
+                ref_ids=ref_ids,
+                voice_clone_prompt=vcp,
+                languages=["English"],
+                speakers=None,
+                non_streaming_mode=True,
+            )
+
+        if not fast._warmed_up:
+            fast.predictor_graph.do_sample = False
+            fast.predictor_graph.top_k = 0
+            fast.predictor_graph.top_p = 1.0
+            fast.predictor_graph.temperature = 1.0
+            fast._warmup(tie.shape[1])
+
+        fast.model.model.talker.rope_deltas = None
+        fast_codes, _ = fast_generate(
+            talker=fast.model.model.talker,
+            talker_input_embeds=tie,
+            attention_mask=tam,
+            trailing_text_hiddens=tth,
+            tts_pad_embed=tpe,
+            config=fast.model.model.config.talker_config,
+            predictor_graph=fast.predictor_graph,
+            talker_graph=fast.talker_graph,
+            max_new_tokens=_MAX_NEW_TOKENS,
+            min_new_tokens=0,
+            do_sample=False,
+            top_k=0,
+            top_p=1.0,
+            temperature=1.0,
+            repetition_penalty=1.0,
+        )
+
+        talker_codes_list, _ = base.model.generate(
+            input_ids=input_ids_base,
             ref_ids=ref_ids,
             voice_clone_prompt=vcp,
             languages=["English"],
-            speakers=None,
             non_streaming_mode=True,
+            do_sample=False,
+            top_k=0,
+            top_p=1.0,
+            temperature=1.0,
+            repetition_penalty=1.0,
+            max_new_tokens=_MAX_NEW_TOKENS,
+            min_new_tokens=0,
+            subtalker_dosample=False,
+            subtalker_top_k=0,
+            subtalker_top_p=1.0,
+            subtalker_temperature=1.0,
         )
 
-    if not fast._warmed_up:
-        fast.predictor_graph.do_sample = False
-        fast.predictor_graph.top_k = 0
-        fast.predictor_graph.top_p = 1.0
-        fast.predictor_graph.temperature = 1.0
-        fast._warmup(tie.shape[1])
-
-    fast.model.model.talker.rope_deltas = None
-    fast_codes, _ = fast_generate(
-        talker=fast.model.model.talker,
-        talker_input_embeds=tie,
-        attention_mask=tam,
-        trailing_text_hiddens=tth,
-        tts_pad_embed=tpe,
-        config=fast.model.model.config.talker_config,
-        predictor_graph=fast.predictor_graph,
-        talker_graph=fast.talker_graph,
-        max_new_tokens=_MAX_NEW_TOKENS,
-        min_new_tokens=0,
-        do_sample=False,
-        top_k=0,
-        top_p=1.0,
-        temperature=1.0,
-        repetition_penalty=1.0,
-    )
-
-    talker_codes_list, _ = base.model.generate(
-        input_ids=input_ids_base,
-        ref_ids=ref_ids,
-        voice_clone_prompt=vcp,
-        languages=["English"],
-        non_streaming_mode=True,
-        do_sample=False,
-        top_k=0,
-        top_p=1.0,
-        temperature=1.0,
-        repetition_penalty=1.0,
-        max_new_tokens=_MAX_NEW_TOKENS,
-        min_new_tokens=0,
-        subtalker_dosample=False,
-        subtalker_top_k=0,
-        subtalker_top_p=1.0,
-        subtalker_temperature=1.0,
-    )
-
-    upstream_codes = talker_codes_list[0].detach().cpu()
-    fast_codes_cpu = fast_codes.detach().cpu()
-    _assert_icl_codes_match(upstream_codes, fast_codes_cpu, label="icl_fast_path/fp32")
+        upstream_codes = talker_codes_list[0].detach().cpu()
+        fast_codes_cpu = fast_codes.detach().cpu()
+        _assert_icl_codes_match(upstream_codes, fast_codes_cpu, label="icl_fast_path/fp32")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -573,195 +598,321 @@ def test_voice_clone_icl_prefix_parity_fast_path(parity_fixture_fp32):
 # specific token value, only structural properties.
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required.")
-def test_voice_clone_xvec_bf16_generates_valid_tokens(parity_fixture):
-    """xvec-only fast path produces structurally valid codec output in bfloat16."""
-    from faster_qwen3_tts.generate import fast_generate
+class TestBF16Parity:
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required.")
+    def test_voice_clone_xvec_bf16_generates_valid_tokens(self, parity_fixture):
+        """xvec-only fast path produces structurally valid codec output in bfloat16."""
+        from faster_qwen3_tts.generate import fast_generate
 
-    _seed_all(0)
-    fast = parity_fixture["fast"]
-    config = fast.model.model.config.talker_config
+        _seed_all(0)
+        fast = parity_fixture["fast"]
+        config = fast.model.model.config.talker_config
 
-    fast_codes, _ = fast_generate(
-        talker=fast.model.model.talker,
-        talker_input_embeds=parity_fixture["tie"],
-        attention_mask=parity_fixture["tam"],
-        trailing_text_hiddens=parity_fixture["tth"],
-        tts_pad_embed=parity_fixture["tpe"],
-        config=config,
-        predictor_graph=fast.predictor_graph,
-        talker_graph=fast.talker_graph,
-        max_new_tokens=_MAX_NEW_TOKENS,
-        min_new_tokens=0,
-        do_sample=False,
-        top_k=0,
-        top_p=1.0,
-        temperature=1.0,
-        repetition_penalty=1.0,
-    )
+        fast_codes, _ = fast_generate(
+            talker=fast.model.model.talker,
+            talker_input_embeds=parity_fixture["tie"],
+            attention_mask=parity_fixture["tam"],
+            trailing_text_hiddens=parity_fixture["tth"],
+            tts_pad_embed=parity_fixture["tpe"],
+            config=config,
+            predictor_graph=fast.predictor_graph,
+            talker_graph=fast.talker_graph,
+            max_new_tokens=_MAX_NEW_TOKENS,
+            min_new_tokens=0,
+            do_sample=False,
+            top_k=0,
+            top_p=1.0,
+            temperature=1.0,
+            repetition_penalty=1.0,
+        )
 
-    _assert_codec_output_valid(fast_codes, config, _MAX_NEW_TOKENS, label="xvec/bf16")
+        _assert_codec_output_valid(fast_codes, config, _MAX_NEW_TOKENS, label="xvec/bf16")
 
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required.")
+    def test_voice_clone_icl_bf16_generates_valid_tokens(self, parity_fixture):
+        """ICL fast path produces structurally valid codec output in bfloat16."""
+        from faster_qwen3_tts.generate import fast_generate
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required.")
-def test_voice_clone_icl_bf16_generates_valid_tokens(parity_fixture):
-    """ICL fast path produces structurally valid codec output in bfloat16."""
-    from faster_qwen3_tts.generate import fast_generate
+        _seed_all(0)
+        fast = parity_fixture["fast"]
 
-    _seed_all(0)
-    fast = parity_fixture["fast"]
+        ref_audio = "ref_audio.wav"
+        text = "Short parity test."
 
-    ref_audio = "ref_audio.wav"
-    text = "Short parity test."
+        with torch.inference_mode():
+            ref_audio_input = fast._load_ref_audio_with_silence(ref_audio)
+            prompt_items = fast.model.create_voice_clone_prompt(
+                ref_audio=ref_audio_input,
+                ref_text=_ICL_REF_TEXT,
+                x_vector_only_mode=False,
+            )
+            vcp = fast.model._prompt_items_to_voice_clone_prompt(prompt_items)
+            ref_text = prompt_items[0].ref_text
+            input_ids_fast = fast.model._tokenize_texts([fast.model._build_assistant_text(text)])
+            ref_ids = [fast.model._tokenize_texts([fast.model._build_ref_text(ref_text)])[0]]
+            tie, tam, tth, tpe = fast._build_talker_inputs_local(
+                m=fast.model.model,
+                input_ids=input_ids_fast,
+                ref_ids=ref_ids,
+                voice_clone_prompt=vcp,
+                languages=["English"],
+                speakers=None,
+                non_streaming_mode=True,
+            )
 
-    with torch.inference_mode():
-        ref_audio_input = fast._load_ref_audio_with_silence(ref_audio)
-        prompt_items = fast.model.create_voice_clone_prompt(
-            ref_audio=ref_audio_input,
+        config = fast.model.model.config.talker_config
+
+        fast.model.model.talker.rope_deltas = None
+        fast_codes, _ = fast_generate(
+            talker=fast.model.model.talker,
+            talker_input_embeds=tie,
+            attention_mask=tam,
+            trailing_text_hiddens=tth,
+            tts_pad_embed=tpe,
+            config=config,
+            predictor_graph=fast.predictor_graph,
+            talker_graph=fast.talker_graph,
+            max_new_tokens=_MAX_NEW_TOKENS,
+            min_new_tokens=0,
+            do_sample=False,
+            top_k=0,
+            top_p=1.0,
+            temperature=1.0,
+            repetition_penalty=1.0,
+        )
+
+        _assert_codec_output_valid(fast_codes, config, _MAX_NEW_TOKENS, label="icl/bf16",
+                                   check_natural_eos=True)
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required.")
+    def test_streaming_bf16_produces_valid_chunks(self, parity_fixture):
+        """Streaming fast path produces non-empty, valid chunks in bfloat16."""
+        from faster_qwen3_tts.streaming import fast_generate_streaming
+
+        _seed_all(0)
+        fast = parity_fixture["fast"]
+        config = fast.model.model.config.talker_config
+
+        chunks = []
+        for chunk, info in fast_generate_streaming(
+            talker=fast.model.model.talker,
+            talker_input_embeds=parity_fixture["tie"],
+            attention_mask=parity_fixture["tam"],
+            trailing_text_hiddens=parity_fixture["tth"],
+            tts_pad_embed=parity_fixture["tpe"],
+            config=config,
+            predictor_graph=fast.predictor_graph,
+            talker_graph=fast.talker_graph,
+            max_new_tokens=_MAX_NEW_TOKENS,
+            min_new_tokens=0,
+            do_sample=False,
+            top_k=0,
+            top_p=1.0,
+            temperature=1.0,
+            repetition_penalty=1.0,
+            chunk_size=8,
+        ):
+            assert chunk.shape[0] > 0, f"chunk {info['chunk_index']} is empty"
+            assert chunk.shape[1] == config.num_code_groups, (
+                f"chunk {info['chunk_index']} has wrong codebook count: {chunk.shape[1]}"
+            )
+            chunks.append(chunk)
+
+        assert len(chunks) > 0, "streaming produced no chunks"
+
+        all_codes = torch.cat(chunks, dim=0)
+        _assert_codec_output_valid(all_codes, config, _MAX_NEW_TOKENS, label="streaming/bf16")
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for streaming parity test.")
+    def test_streaming_matches_non_streaming_prefix(self, parity_fixture):
+        """Streaming and non-streaming fast paths produce identical tokens.
+
+        Both call the same CUDA graph with the same inputs; they must agree on every
+        token.  Using _MAX_NEW_TOKENS ensures both paths reach the natural EOS and
+        we verify the full output, not a truncated prefix.
+        """
+        from faster_qwen3_tts.generate import fast_generate
+        from faster_qwen3_tts.streaming import fast_generate_streaming
+
+        _seed_all(0)
+        fast = parity_fixture["fast"]
+
+        full_codes, _ = fast_generate(
+            talker=fast.model.model.talker,
+            talker_input_embeds=parity_fixture["tie"],
+            attention_mask=parity_fixture["tam"],
+            trailing_text_hiddens=parity_fixture["tth"],
+            tts_pad_embed=parity_fixture["tpe"],
+            config=fast.model.model.config.talker_config,
+            predictor_graph=fast.predictor_graph,
+            talker_graph=fast.talker_graph,
+            max_new_tokens=_MAX_NEW_TOKENS,
+            min_new_tokens=0,
+            do_sample=False,
+            top_k=0,
+            top_p=1.0,
+            temperature=1.0,
+            repetition_penalty=1.0,
+        )
+
+        chunks = []
+        for chunk, _ in fast_generate_streaming(
+            talker=fast.model.model.talker,
+            talker_input_embeds=parity_fixture["tie"],
+            attention_mask=parity_fixture["tam"],
+            trailing_text_hiddens=parity_fixture["tth"],
+            tts_pad_embed=parity_fixture["tpe"],
+            config=fast.model.model.config.talker_config,
+            predictor_graph=fast.predictor_graph,
+            talker_graph=fast.talker_graph,
+            max_new_tokens=_MAX_NEW_TOKENS,
+            min_new_tokens=0,
+            do_sample=False,
+            top_k=0,
+            top_p=1.0,
+            temperature=1.0,
+            repetition_penalty=1.0,
+            chunk_size=8,
+        ):
+            chunks.append(chunk)
+
+        stream_codes = torch.cat(chunks, dim=0)
+        _assert_codes_match(full_codes.cpu(), stream_codes.cpu(), label="streaming_vs_non_streaming")
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for ICL parity test.")
+    def test_voice_clone_icl_full_parity_dynamic_cache(self, parity_fixture):
+        """fast._build_talker_inputs_local matches upstream for ICL mode (DynamicCache)."""
+        from faster_qwen3_tts.generate import fast_generate
+
+        _seed_all(0)
+
+        ref_audio = "ref_audio.wav"
+        text = "Short parity test."
+
+        base = parity_fixture["base"]
+        fast = parity_fixture["fast"]
+
+        with torch.inference_mode():
+            ref_audio_input = fast._load_ref_audio_with_silence(ref_audio)
+            prompt_items = base.create_voice_clone_prompt(
+                ref_audio=ref_audio_input,
+                ref_text=_ICL_REF_TEXT,
+                x_vector_only_mode=False,
+            )
+            vcp = base._prompt_items_to_voice_clone_prompt(prompt_items)
+            ref_text = prompt_items[0].ref_text
+
+            input_ids_base = base._tokenize_texts([base._build_assistant_text(text)])
+            input_ids_fast = fast.model._tokenize_texts([fast.model._build_assistant_text(text)])
+            ref_ids = [base._tokenize_texts([base._build_ref_text(ref_text)])[0]]
+
+            tie, tam, tth, tpe = fast._build_talker_inputs_local(
+                m=fast.model.model,
+                input_ids=input_ids_fast,
+                ref_ids=ref_ids,
+                voice_clone_prompt=vcp,
+                languages=["English"],
+                speakers=None,
+                non_streaming_mode=True,
+            )
+
+        if not fast._warmed_up:
+            fast.predictor_graph.do_sample = False
+            fast.predictor_graph.top_k = 0
+            fast.predictor_graph.top_p = 1.0
+            fast.predictor_graph.temperature = 1.0
+            fast._warmup(tie.shape[1])
+
+        fast.model.model.talker.rope_deltas = None
+        fast_codes, _ = fast_generate(
+            talker=fast.model.model.talker,
+            talker_input_embeds=tie,
+            attention_mask=tam,
+            trailing_text_hiddens=tth,
+            tts_pad_embed=tpe,
+            config=fast.model.model.config.talker_config,
+            predictor_graph=fast.predictor_graph,
+            talker_graph=fast.talker_graph,
+            max_new_tokens=_MAX_NEW_TOKENS,
+            min_new_tokens=0,
+            do_sample=False,
+            top_k=0,
+            top_p=1.0,
+            temperature=1.0,
+            repetition_penalty=1.0,
+            subtalker_dosample=False,
+            subtalker_top_k=0,
+            subtalker_top_p=1.0,
+            subtalker_temperature=1.0,
+            parity_mode=True,
+        )
+
+        talker_codes_list, _ = base.model.generate(
+            input_ids=input_ids_base,
+            ref_ids=ref_ids,
+            voice_clone_prompt=vcp,
+            languages=["English"],
+            non_streaming_mode=True,
+            do_sample=False,
+            top_k=0,
+            top_p=1.0,
+            temperature=1.0,
+            repetition_penalty=1.0,
+            max_new_tokens=_MAX_NEW_TOKENS,
+            min_new_tokens=0,
+            subtalker_dosample=False,
+            subtalker_top_k=0,
+            subtalker_top_p=1.0,
+            subtalker_temperature=1.0,
+        )
+
+        upstream_codes = talker_codes_list[0].detach().cpu()
+        fast_codes_cpu = fast_codes.detach().cpu()
+        _assert_codes_match(upstream_codes, fast_codes_cpu, label="icl/dynamic_cache")
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for ICL parity test.")
+    def test_icl_build_talker_inputs_outside_inference_mode(self, parity_fixture):
+        """Regression test: _build_talker_inputs_local must work with ICL ref_code tensors
+        even when called outside of torch.inference_mode().
+
+        create_voice_clone_prompt() runs under @torch.inference_mode(), producing inference
+        tensors. Without the .clone() fix these tensors trigger a RuntimeError when passed
+        to nn.Embedding outside an inference_mode context.
+        """
+        base = parity_fixture["base"]
+        fast = parity_fixture["fast"]
+
+        ref_audio = "ref_audio.wav"
+        text = "Short parity test."
+
+        prompt_items = base.create_voice_clone_prompt(
+            ref_audio=ref_audio,
             ref_text=_ICL_REF_TEXT,
             x_vector_only_mode=False,
         )
-        vcp = fast.model._prompt_items_to_voice_clone_prompt(prompt_items)
+        vcp = base._prompt_items_to_voice_clone_prompt(prompt_items)
+        assert vcp["ref_code"][0] is not None and vcp["ref_code"][0].is_inference(), (
+            "pre-condition: ref_code must be an inference tensor for this test to be meaningful"
+        )
+
         ref_text = prompt_items[0].ref_text
-        input_ids_fast = fast.model._tokenize_texts([fast.model._build_assistant_text(text)])
-        ref_ids = [fast.model._tokenize_texts([fast.model._build_ref_text(ref_text)])[0]]
-        tie, tam, tth, tpe = fast._build_talker_inputs_local(
+        input_ids = fast.model._tokenize_texts([fast.model._build_assistant_text(text)])
+        ref_ids = [base._tokenize_texts([base._build_ref_text(ref_text)])[0]]
+
+        # Must NOT be wrapped in torch.inference_mode() — that is the scenario that used to crash.
+        fast._build_talker_inputs_local(
             m=fast.model.model,
-            input_ids=input_ids_fast,
+            input_ids=input_ids,
             ref_ids=ref_ids,
             voice_clone_prompt=vcp,
             languages=["English"],
             speakers=None,
-            non_streaming_mode=True,
+            non_streaming_mode=False,
         )
-
-    config = fast.model.model.config.talker_config
-
-    fast.model.model.talker.rope_deltas = None
-    fast_codes, _ = fast_generate(
-        talker=fast.model.model.talker,
-        talker_input_embeds=tie,
-        attention_mask=tam,
-        trailing_text_hiddens=tth,
-        tts_pad_embed=tpe,
-        config=config,
-        predictor_graph=fast.predictor_graph,
-        talker_graph=fast.talker_graph,
-        max_new_tokens=_MAX_NEW_TOKENS,
-        min_new_tokens=0,
-        do_sample=False,
-        top_k=0,
-        top_p=1.0,
-        temperature=1.0,
-        repetition_penalty=1.0,
-    )
-
-    _assert_codec_output_valid(fast_codes, config, _MAX_NEW_TOKENS, label="icl/bf16",
-                               check_natural_eos=True)
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required.")
-def test_streaming_bf16_produces_valid_chunks(parity_fixture):
-    """Streaming fast path produces non-empty, valid chunks in bfloat16."""
-    from faster_qwen3_tts.streaming import fast_generate_streaming
-
-    _seed_all(0)
-    fast = parity_fixture["fast"]
-    config = fast.model.model.config.talker_config
-
-    chunks = []
-    for chunk, info in fast_generate_streaming(
-        talker=fast.model.model.talker,
-        talker_input_embeds=parity_fixture["tie"],
-        attention_mask=parity_fixture["tam"],
-        trailing_text_hiddens=parity_fixture["tth"],
-        tts_pad_embed=parity_fixture["tpe"],
-        config=config,
-        predictor_graph=fast.predictor_graph,
-        talker_graph=fast.talker_graph,
-        max_new_tokens=_MAX_NEW_TOKENS,
-        min_new_tokens=0,
-        do_sample=False,
-        top_k=0,
-        top_p=1.0,
-        temperature=1.0,
-        repetition_penalty=1.0,
-        chunk_size=8,
-    ):
-        assert chunk.shape[0] > 0, f"chunk {info['chunk_index']} is empty"
-        assert chunk.shape[1] == config.num_code_groups, (
-            f"chunk {info['chunk_index']} has wrong codebook count: {chunk.shape[1]}"
-        )
-        chunks.append(chunk)
-
-    assert len(chunks) > 0, "streaming produced no chunks"
-
-    all_codes = torch.cat(chunks, dim=0)
-    _assert_codec_output_valid(all_codes, config, _MAX_NEW_TOKENS, label="streaming/bf16")
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required.")
-def test_custom_voice_bf16_generates_valid_tokens(custom_voice_fixture):
-    """CustomVoice fast path (CUDA graph) produces valid codec tokens in bfloat16."""
-    from faster_qwen3_tts.generate import fast_generate
-
-    _seed_all(0)
-    fast = custom_voice_fixture["fast"]
-    config = fast.model.model.config.talker_config
-
-    fast_codes, _ = fast_generate(
-        talker=fast.model.model.talker,
-        talker_input_embeds=custom_voice_fixture["tie"],
-        attention_mask=custom_voice_fixture["tam"],
-        trailing_text_hiddens=custom_voice_fixture["tth"],
-        tts_pad_embed=custom_voice_fixture["tpe"],
-        config=config,
-        predictor_graph=fast.predictor_graph,
-        talker_graph=fast.talker_graph,
-        max_new_tokens=_MAX_NEW_TOKENS,
-        min_new_tokens=0,
-        do_sample=False,
-        top_k=0,
-        top_p=1.0,
-        temperature=1.0,
-        repetition_penalty=1.0,
-    )
-
-    _assert_codec_output_valid(fast_codes, config, _MAX_NEW_TOKENS, label="custom_voice/bf16")
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required.")
-def test_voice_design_bf16_generates_valid_tokens(voice_design_fixture):
-    """VoiceDesign fast path (CUDA graph) produces valid codec tokens in bfloat16."""
-    from faster_qwen3_tts.generate import fast_generate
-
-    _seed_all(0)
-    fast = voice_design_fixture["fast"]
-    config = fast.model.model.config.talker_config
-
-    fast_codes, _ = fast_generate(
-        talker=fast.model.model.talker,
-        talker_input_embeds=voice_design_fixture["tie"],
-        attention_mask=voice_design_fixture["tam"],
-        trailing_text_hiddens=voice_design_fixture["tth"],
-        tts_pad_embed=voice_design_fixture["tpe"],
-        config=config,
-        predictor_graph=fast.predictor_graph,
-        talker_graph=fast.talker_graph,
-        max_new_tokens=_MAX_NEW_TOKENS,
-        min_new_tokens=0,
-        do_sample=False,
-        top_k=0,
-        top_p=1.0,
-        temperature=1.0,
-        repetition_penalty=1.0,
-    )
-
-    _assert_codec_output_valid(fast_codes, config, _MAX_NEW_TOKENS, label="voice_design/bf16")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LAYER 3 — DYNAMIC CACHE PARITY TESTS
+# LAYER 3 — DYNAMIC CACHE PARITY TESTS (CustomVoice / VoiceDesign)
 #
 # Goal: verify that fast._build_talker_inputs_local correctly replicates what
 # the upstream build internally, by comparing the two when both run the SAME
@@ -777,309 +928,179 @@ def test_voice_design_bf16_generates_valid_tokens(voice_design_fixture):
 # post-processing paths handled differently.
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for streaming parity test.")
-def test_streaming_matches_non_streaming_prefix(parity_fixture):
-    """Streaming and non-streaming fast paths produce identical tokens.
+class TestCustomVoice:
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required.")
+    def test_custom_voice_bf16_generates_valid_tokens(self, custom_voice_fixture):
+        """CustomVoice fast path (CUDA graph) produces valid codec tokens in bfloat16."""
+        from faster_qwen3_tts.generate import fast_generate
 
-    Both call the same CUDA graph with the same inputs; they must agree on every
-    token.  Using _MAX_NEW_TOKENS ensures both paths reach the natural EOS and
-    we verify the full output, not a truncated prefix.
-    """
-    from faster_qwen3_tts.generate import fast_generate
-    from faster_qwen3_tts.streaming import fast_generate_streaming
+        _seed_all(0)
+        fast = custom_voice_fixture["fast"]
+        config = fast.model.model.config.talker_config
 
-    _seed_all(0)
-    fast = parity_fixture["fast"]
-
-    full_codes, _ = fast_generate(
-        talker=fast.model.model.talker,
-        talker_input_embeds=parity_fixture["tie"],
-        attention_mask=parity_fixture["tam"],
-        trailing_text_hiddens=parity_fixture["tth"],
-        tts_pad_embed=parity_fixture["tpe"],
-        config=fast.model.model.config.talker_config,
-        predictor_graph=fast.predictor_graph,
-        talker_graph=fast.talker_graph,
-        max_new_tokens=_MAX_NEW_TOKENS,
-        min_new_tokens=0,
-        do_sample=False,
-        top_k=0,
-        top_p=1.0,
-        temperature=1.0,
-        repetition_penalty=1.0,
-    )
-
-    chunks = []
-    for chunk, _ in fast_generate_streaming(
-        talker=fast.model.model.talker,
-        talker_input_embeds=parity_fixture["tie"],
-        attention_mask=parity_fixture["tam"],
-        trailing_text_hiddens=parity_fixture["tth"],
-        tts_pad_embed=parity_fixture["tpe"],
-        config=fast.model.model.config.talker_config,
-        predictor_graph=fast.predictor_graph,
-        talker_graph=fast.talker_graph,
-        max_new_tokens=_MAX_NEW_TOKENS,
-        min_new_tokens=0,
-        do_sample=False,
-        top_k=0,
-        top_p=1.0,
-        temperature=1.0,
-        repetition_penalty=1.0,
-        chunk_size=8,
-    ):
-        chunks.append(chunk)
-
-    stream_codes = torch.cat(chunks, dim=0)
-    _assert_codes_match(full_codes.cpu(), stream_codes.cpu(), label="streaming_vs_non_streaming")
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for custom voice parity test.")
-def test_custom_voice_full_parity_dynamic_cache(custom_voice_fixture):
-    """fast._build_talker_inputs_local matches upstream for CustomVoice (DynamicCache)."""
-    from faster_qwen3_tts.generate import fast_generate
-
-    base = custom_voice_fixture["base"]
-    fast = custom_voice_fixture["fast"]
-    speaker = custom_voice_fixture["speaker"]
-    language = custom_voice_fixture["language"]
-
-    assert torch.equal(custom_voice_fixture["input_ids_base"][0].cpu(), custom_voice_fixture["input_ids_fast"][0].cpu())
-
-    fast_codes, _ = fast_generate(
-        talker=fast.model.model.talker,
-        talker_input_embeds=custom_voice_fixture["tie"],
-        attention_mask=custom_voice_fixture["tam"],
-        trailing_text_hiddens=custom_voice_fixture["tth"],
-        tts_pad_embed=custom_voice_fixture["tpe"],
-        config=fast.model.model.config.talker_config,
-        predictor_graph=fast.predictor_graph,
-        talker_graph=fast.talker_graph,
-        max_new_tokens=_MAX_NEW_TOKENS,
-        min_new_tokens=0,
-        do_sample=False,
-        top_k=0,
-        top_p=1.0,
-        temperature=1.0,
-        repetition_penalty=1.0,
-        subtalker_dosample=False,
-        subtalker_top_k=0,
-        subtalker_top_p=1.0,
-        subtalker_temperature=1.0,
-        parity_mode=True,
-    )
-
-    talker_codes_list, _ = base.model.generate(
-        input_ids=custom_voice_fixture["input_ids_base"],
-        instruct_ids=[None],
-        speakers=[speaker],
-        languages=[language],
-        non_streaming_mode=False,
-        do_sample=False,
-        top_k=0,
-        top_p=1.0,
-        temperature=1.0,
-        repetition_penalty=1.0,
-        max_new_tokens=_MAX_NEW_TOKENS,
-        min_new_tokens=0,
-        subtalker_dosample=False,
-        subtalker_top_k=0,
-        subtalker_top_p=1.0,
-        subtalker_temperature=1.0,
-    )
-
-    upstream_codes = talker_codes_list[0].detach().cpu()
-    fast_codes_cpu = fast_codes.detach().cpu()
-    _assert_codes_match(upstream_codes, fast_codes_cpu, label="custom_voice/dynamic_cache")
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for voice design parity test.")
-def test_voice_design_full_parity_dynamic_cache(voice_design_fixture):
-    """fast._build_talker_inputs_local matches upstream for VoiceDesign (DynamicCache)."""
-    from faster_qwen3_tts.generate import fast_generate
-
-    base = voice_design_fixture["base"]
-    fast = voice_design_fixture["fast"]
-    language = voice_design_fixture["language"]
-    instruct = voice_design_fixture["instruct"]
-
-    assert torch.equal(voice_design_fixture["input_ids_base"][0].cpu(), voice_design_fixture["input_ids_fast"][0].cpu())
-
-    fast_codes, _ = fast_generate(
-        talker=fast.model.model.talker,
-        talker_input_embeds=voice_design_fixture["tie"],
-        attention_mask=voice_design_fixture["tam"],
-        trailing_text_hiddens=voice_design_fixture["tth"],
-        tts_pad_embed=voice_design_fixture["tpe"],
-        config=fast.model.model.config.talker_config,
-        predictor_graph=fast.predictor_graph,
-        talker_graph=fast.talker_graph,
-        max_new_tokens=_MAX_NEW_TOKENS,
-        min_new_tokens=0,
-        do_sample=False,
-        top_k=0,
-        top_p=1.0,
-        temperature=1.0,
-        repetition_penalty=1.0,
-        subtalker_dosample=False,
-        subtalker_top_k=0,
-        subtalker_top_p=1.0,
-        subtalker_temperature=1.0,
-        parity_mode=True,
-    )
-
-    instruct_ids = base._tokenize_texts([base._build_instruct_text(instruct)])[0]
-    talker_codes_list, _ = base.model.generate(
-        input_ids=voice_design_fixture["input_ids_base"],
-        instruct_ids=[instruct_ids],
-        languages=[language],
-        non_streaming_mode=False,
-        do_sample=False,
-        top_k=0,
-        top_p=1.0,
-        temperature=1.0,
-        repetition_penalty=1.0,
-        max_new_tokens=_MAX_NEW_TOKENS,
-        min_new_tokens=0,
-        subtalker_dosample=False,
-        subtalker_top_k=0,
-        subtalker_top_p=1.0,
-        subtalker_temperature=1.0,
-    )
-
-    upstream_codes = talker_codes_list[0].detach().cpu()
-    fast_codes_cpu = fast_codes.detach().cpu()
-    _assert_codes_match(upstream_codes, fast_codes_cpu, label="voice_design/dynamic_cache")
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for ICL parity test.")
-def test_voice_clone_icl_full_parity_dynamic_cache(parity_fixture):
-    """fast._build_talker_inputs_local matches upstream for ICL mode (DynamicCache)."""
-    from faster_qwen3_tts.generate import fast_generate
-
-    _seed_all(0)
-
-    ref_audio = "ref_audio.wav"
-    text = "Short parity test."
-
-    base = parity_fixture["base"]
-    fast = parity_fixture["fast"]
-
-    with torch.inference_mode():
-        ref_audio_input = fast._load_ref_audio_with_silence(ref_audio)
-        prompt_items = base.create_voice_clone_prompt(
-            ref_audio=ref_audio_input,
-            ref_text=_ICL_REF_TEXT,
-            x_vector_only_mode=False,
-        )
-        vcp = base._prompt_items_to_voice_clone_prompt(prompt_items)
-        ref_text = prompt_items[0].ref_text
-
-        input_ids_base = base._tokenize_texts([base._build_assistant_text(text)])
-        input_ids_fast = fast.model._tokenize_texts([fast.model._build_assistant_text(text)])
-        ref_ids = [base._tokenize_texts([base._build_ref_text(ref_text)])[0]]
-
-        tie, tam, tth, tpe = fast._build_talker_inputs_local(
-            m=fast.model.model,
-            input_ids=input_ids_fast,
-            ref_ids=ref_ids,
-            voice_clone_prompt=vcp,
-            languages=["English"],
-            speakers=None,
-            non_streaming_mode=True,
+        fast_codes, _ = fast_generate(
+            talker=fast.model.model.talker,
+            talker_input_embeds=custom_voice_fixture["tie"],
+            attention_mask=custom_voice_fixture["tam"],
+            trailing_text_hiddens=custom_voice_fixture["tth"],
+            tts_pad_embed=custom_voice_fixture["tpe"],
+            config=config,
+            predictor_graph=fast.predictor_graph,
+            talker_graph=fast.talker_graph,
+            max_new_tokens=_MAX_NEW_TOKENS,
+            min_new_tokens=0,
+            do_sample=False,
+            top_k=0,
+            top_p=1.0,
+            temperature=1.0,
+            repetition_penalty=1.0,
         )
 
-    if not fast._warmed_up:
-        fast.predictor_graph.do_sample = False
-        fast.predictor_graph.top_k = 0
-        fast.predictor_graph.top_p = 1.0
-        fast.predictor_graph.temperature = 1.0
-        fast._warmup(tie.shape[1])
+        _assert_codec_output_valid(fast_codes, config, _MAX_NEW_TOKENS, label="custom_voice/bf16")
 
-    fast.model.model.talker.rope_deltas = None
-    fast_codes, _ = fast_generate(
-        talker=fast.model.model.talker,
-        talker_input_embeds=tie,
-        attention_mask=tam,
-        trailing_text_hiddens=tth,
-        tts_pad_embed=tpe,
-        config=fast.model.model.config.talker_config,
-        predictor_graph=fast.predictor_graph,
-        talker_graph=fast.talker_graph,
-        max_new_tokens=_MAX_NEW_TOKENS,
-        min_new_tokens=0,
-        do_sample=False,
-        top_k=0,
-        top_p=1.0,
-        temperature=1.0,
-        repetition_penalty=1.0,
-        subtalker_dosample=False,
-        subtalker_top_k=0,
-        subtalker_top_p=1.0,
-        subtalker_temperature=1.0,
-        parity_mode=True,
-    )
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for custom voice parity test.")
+    def test_custom_voice_full_parity_dynamic_cache(self, custom_voice_fixture):
+        """fast._build_talker_inputs_local matches upstream for CustomVoice (DynamicCache)."""
+        from faster_qwen3_tts.generate import fast_generate
 
-    talker_codes_list, _ = base.model.generate(
-        input_ids=input_ids_base,
-        ref_ids=ref_ids,
-        voice_clone_prompt=vcp,
-        languages=["English"],
-        non_streaming_mode=True,
-        do_sample=False,
-        top_k=0,
-        top_p=1.0,
-        temperature=1.0,
-        repetition_penalty=1.0,
-        max_new_tokens=_MAX_NEW_TOKENS,
-        min_new_tokens=0,
-        subtalker_dosample=False,
-        subtalker_top_k=0,
-        subtalker_top_p=1.0,
-        subtalker_temperature=1.0,
-    )
+        base = custom_voice_fixture["base"]
+        fast = custom_voice_fixture["fast"]
+        speaker = custom_voice_fixture["speaker"]
+        language = custom_voice_fixture["language"]
 
-    upstream_codes = talker_codes_list[0].detach().cpu()
-    fast_codes_cpu = fast_codes.detach().cpu()
-    _assert_codes_match(upstream_codes, fast_codes_cpu, label="icl/dynamic_cache")
+        assert torch.equal(custom_voice_fixture["input_ids_base"][0].cpu(), custom_voice_fixture["input_ids_fast"][0].cpu())
+
+        fast_codes, _ = fast_generate(
+            talker=fast.model.model.talker,
+            talker_input_embeds=custom_voice_fixture["tie"],
+            attention_mask=custom_voice_fixture["tam"],
+            trailing_text_hiddens=custom_voice_fixture["tth"],
+            tts_pad_embed=custom_voice_fixture["tpe"],
+            config=fast.model.model.config.talker_config,
+            predictor_graph=fast.predictor_graph,
+            talker_graph=fast.talker_graph,
+            max_new_tokens=_MAX_NEW_TOKENS,
+            min_new_tokens=0,
+            do_sample=False,
+            top_k=0,
+            top_p=1.0,
+            temperature=1.0,
+            repetition_penalty=1.0,
+            subtalker_dosample=False,
+            subtalker_top_k=0,
+            subtalker_top_p=1.0,
+            subtalker_temperature=1.0,
+            parity_mode=True,
+        )
+
+        talker_codes_list, _ = base.model.generate(
+            input_ids=custom_voice_fixture["input_ids_base"],
+            instruct_ids=[None],
+            speakers=[speaker],
+            languages=[language],
+            non_streaming_mode=False,
+            do_sample=False,
+            top_k=0,
+            top_p=1.0,
+            temperature=1.0,
+            repetition_penalty=1.0,
+            max_new_tokens=_MAX_NEW_TOKENS,
+            min_new_tokens=0,
+            subtalker_dosample=False,
+            subtalker_top_k=0,
+            subtalker_top_p=1.0,
+            subtalker_temperature=1.0,
+        )
+
+        upstream_codes = talker_codes_list[0].detach().cpu()
+        fast_codes_cpu = fast_codes.detach().cpu()
+        _assert_codes_match(upstream_codes, fast_codes_cpu, label="custom_voice/dynamic_cache")
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for ICL parity test.")
-def test_icl_build_talker_inputs_outside_inference_mode(parity_fixture):
-    """Regression test: _build_talker_inputs_local must work with ICL ref_code tensors
-    even when called outside of torch.inference_mode().
+class TestVoiceDesign:
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required.")
+    def test_voice_design_bf16_generates_valid_tokens(self, voice_design_fixture):
+        """VoiceDesign fast path (CUDA graph) produces valid codec tokens in bfloat16."""
+        from faster_qwen3_tts.generate import fast_generate
 
-    create_voice_clone_prompt() runs under @torch.inference_mode(), producing inference
-    tensors. Without the .clone() fix these tensors trigger a RuntimeError when passed
-    to nn.Embedding outside an inference_mode context.
-    """
-    base = parity_fixture["base"]
-    fast = parity_fixture["fast"]
+        _seed_all(0)
+        fast = voice_design_fixture["fast"]
+        config = fast.model.model.config.talker_config
 
-    ref_audio = "ref_audio.wav"
-    text = "Short parity test."
+        fast_codes, _ = fast_generate(
+            talker=fast.model.model.talker,
+            talker_input_embeds=voice_design_fixture["tie"],
+            attention_mask=voice_design_fixture["tam"],
+            trailing_text_hiddens=voice_design_fixture["tth"],
+            tts_pad_embed=voice_design_fixture["tpe"],
+            config=config,
+            predictor_graph=fast.predictor_graph,
+            talker_graph=fast.talker_graph,
+            max_new_tokens=_MAX_NEW_TOKENS,
+            min_new_tokens=0,
+            do_sample=False,
+            top_k=0,
+            top_p=1.0,
+            temperature=1.0,
+            repetition_penalty=1.0,
+        )
 
-    prompt_items = base.create_voice_clone_prompt(
-        ref_audio=ref_audio,
-        ref_text=_ICL_REF_TEXT,
-        x_vector_only_mode=False,
-    )
-    vcp = base._prompt_items_to_voice_clone_prompt(prompt_items)
-    assert vcp["ref_code"][0] is not None and vcp["ref_code"][0].is_inference(), (
-        "pre-condition: ref_code must be an inference tensor for this test to be meaningful"
-    )
+        _assert_codec_output_valid(fast_codes, config, _MAX_NEW_TOKENS, label="voice_design/bf16")
 
-    ref_text = prompt_items[0].ref_text
-    input_ids = fast.model._tokenize_texts([fast.model._build_assistant_text(text)])
-    ref_ids = [base._tokenize_texts([base._build_ref_text(ref_text)])[0]]
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for voice design parity test.")
+    def test_voice_design_full_parity_dynamic_cache(self, voice_design_fixture):
+        """fast._build_talker_inputs_local matches upstream for VoiceDesign (DynamicCache)."""
+        from faster_qwen3_tts.generate import fast_generate
 
-    # Must NOT be wrapped in torch.inference_mode() — that is the scenario that used to crash.
-    fast._build_talker_inputs_local(
-        m=fast.model.model,
-        input_ids=input_ids,
-        ref_ids=ref_ids,
-        voice_clone_prompt=vcp,
-        languages=["English"],
-        speakers=None,
-        non_streaming_mode=False,
-    )
+        base = voice_design_fixture["base"]
+        fast = voice_design_fixture["fast"]
+        language = voice_design_fixture["language"]
+        instruct = voice_design_fixture["instruct"]
+
+        assert torch.equal(voice_design_fixture["input_ids_base"][0].cpu(), voice_design_fixture["input_ids_fast"][0].cpu())
+
+        fast_codes, _ = fast_generate(
+            talker=fast.model.model.talker,
+            talker_input_embeds=voice_design_fixture["tie"],
+            attention_mask=voice_design_fixture["tam"],
+            trailing_text_hiddens=voice_design_fixture["tth"],
+            tts_pad_embed=voice_design_fixture["tpe"],
+            config=fast.model.model.config.talker_config,
+            predictor_graph=fast.predictor_graph,
+            talker_graph=fast.talker_graph,
+            max_new_tokens=_MAX_NEW_TOKENS,
+            min_new_tokens=0,
+            do_sample=False,
+            top_k=0,
+            top_p=1.0,
+            temperature=1.0,
+            repetition_penalty=1.0,
+            subtalker_dosample=False,
+            subtalker_top_k=0,
+            subtalker_top_p=1.0,
+            subtalker_temperature=1.0,
+            parity_mode=True,
+        )
+
+        instruct_ids = base._tokenize_texts([base._build_instruct_text(instruct)])[0]
+        talker_codes_list, _ = base.model.generate(
+            input_ids=voice_design_fixture["input_ids_base"],
+            instruct_ids=[instruct_ids],
+            languages=[language],
+            non_streaming_mode=False,
+            do_sample=False,
+            top_k=0,
+            top_p=1.0,
+            temperature=1.0,
+            repetition_penalty=1.0,
+            max_new_tokens=_MAX_NEW_TOKENS,
+            min_new_tokens=0,
+            subtalker_dosample=False,
+            subtalker_top_k=0,
+            subtalker_top_p=1.0,
+            subtalker_temperature=1.0,
+        )
+
+        upstream_codes = talker_codes_list[0].detach().cpu()
+        fast_codes_cpu = fast_codes.detach().cpu()
+        _assert_codes_match(upstream_codes, fast_codes_cpu, label="voice_design/dynamic_cache")
