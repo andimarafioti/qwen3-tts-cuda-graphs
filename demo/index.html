@@ -1274,7 +1274,6 @@ function pickRef(input) { const f = input.files[0]; if (f) setRef(f); }
 function setRef(f) {
   clearPresetSelection();
   refFile = f;
-  setXvec(true); // user audio has no verified transcript — default to Simple (xvec) mode
   $('refLabel').textContent = f.name;
   $('refChip').classList.add('has');
   const prev = $('recPreview');
