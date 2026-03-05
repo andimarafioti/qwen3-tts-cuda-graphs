@@ -663,8 +663,8 @@ body {
       <!-- Simple / Advanced toggle -->
       <div class="clone-toggle-row">
         <div class="toggle">
-          <div class="tog on" data-x="1" onclick="setXvec(true)">Simple</div>
-          <div class="tog" data-x="0" onclick="setXvec(false)">Advanced</div>
+          <div class="tog" data-x="1" onclick="setXvec(true)">Simple</div>
+          <div class="tog on" data-x="0" onclick="setXvec(false)">Advanced</div>
         </div>
       </div>
       <!-- Reference audio + action buttons -->
@@ -862,7 +862,7 @@ function setPlayBtns(disabled) {
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let genMode  = 'stream';
-let xvecOnly = true;
+let xvecOnly = false;
 let busy     = false;
 let refFile  = null;
 let presetRefId = null;
