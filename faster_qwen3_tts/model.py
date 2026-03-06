@@ -42,9 +42,31 @@ class FasterQwen3TTS:
         self.device = device
         self.dtype = dtype
         self.max_seq_len = max_seq_len
-        self.sample_rate = 12000  # Qwen3-TTS uses 12kHz
+        self.sample_rate = self._infer_sample_rate(base_model)
         self._warmed_up = False
         self._voice_prompt_cache = {}  # Cache (ref_audio, ref_text) -> (vcp, ref_ids)
+
+    @staticmethod
+    def _infer_sample_rate(base_model) -> int:
+        """Infer output audio sample rate from qwen-tts internals."""
+        # Qwen3-TTS model IDs include "12Hz", but that is codec frame-rate (tokens/s),
+        # not waveform sampling rate. Generated audio is 24kHz.
+        sample_rate = None
+
+        speech_tokenizer = getattr(getattr(base_model, "model", None), "speech_tokenizer", None)
+        if speech_tokenizer is not None:
+            sample_rate = getattr(speech_tokenizer, "sample_rate", None)
+
+        if sample_rate is None:
+            sample_rate = getattr(base_model, "sample_rate", None)
+
+        if sample_rate is None:
+            logger.warning(
+                "Could not infer sample rate from base model; defaulting to 24000 Hz."
+            )
+            return 24000
+
+        return int(sample_rate)
         
     @classmethod
     def from_pretrained(

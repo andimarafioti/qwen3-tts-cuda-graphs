@@ -39,7 +39,7 @@ def _stream_to_audio(gen):
     for audio_chunk, sr, _ in gen:
         chunks.append(audio_chunk)
     if not chunks:
-        return np.zeros(1, dtype=np.float32), 12000
+        return np.zeros(1, dtype=np.float32), 24000
     return np.concatenate(chunks), sr
 
 
