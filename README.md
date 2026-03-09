@@ -413,6 +413,33 @@ The speaker embedding is a 4KB file (2048-dim bf16 vector). In `x_vector_only` m
 - **Shorter prefill**: 10 tokens vs ~80+ in full ICL clone mode
 - **No ref audio at runtime**: just the 4KB embedding file
 
+You can now pass this precomputed prompt directly to the public APIs:
+
+```python
+import torch
+from faster_qwen3_tts import FasterQwen3TTS
+
+model = FasterQwen3TTS.from_pretrained("Qwen/Qwen3-TTS-12Hz-1.7B-Base")
+spk_emb = torch.load("speaker.pt", weights_only=True).to(model.device)
+
+voice_clone_prompt = {
+    "ref_code": [None],
+    "ref_spk_embedding": [spk_emb],
+    "x_vector_only_mode": [True],
+    "icl_mode": [False],
+}
+
+audio_list, sr = model.generate_voice_clone(
+    text="Hello world!",
+    language="English",
+    ref_audio="ignored_when_voice_clone_prompt_is_set.wav",
+    ref_text="",
+    voice_clone_prompt=voice_clone_prompt,
+)
+```
+
+When `voice_clone_prompt` is provided, prompt extraction from `ref_audio` is skipped.
+
 ## License
 
 MIT
