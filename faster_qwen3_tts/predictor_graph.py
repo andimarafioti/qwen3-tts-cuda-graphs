@@ -83,7 +83,7 @@ class PredictorGraph:
         dummy_k = torch.zeros(1, num_kv_heads, 1, head_dim, dtype=self.dtype, device=self.device)
         for layer in self.static_cache.layers:
             if not layer.is_initialized:
-                layer.lazy_initialization(dummy_k)
+                layer.lazy_initialization(dummy_k, dummy_k)
 
     def _make_attn_mask(self, input_embeds: torch.Tensor, cache_position: torch.Tensor):
         mask = create_causal_mask(

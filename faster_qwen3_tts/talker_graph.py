@@ -66,7 +66,7 @@ class TalkerGraph:
         dummy_k = torch.zeros(1, num_kv_heads, 1, head_dim, dtype=self.dtype, device=self.device)
         for layer in self.static_cache.layers:
             if not layer.is_initialized:
-                layer.lazy_initialization(dummy_k)
+                layer.lazy_initialization(dummy_k, dummy_k)
 
     def _build_attention_masks(self, attention_mask: torch.Tensor | None = None):
         dummy = torch.zeros(1, 1, self.hidden_size, dtype=self.dtype, device=self.device)
@@ -158,7 +158,8 @@ class TalkerGraph:
         self.static_cache.reset()
         seq_len = 0
         for li in range(self.num_layers):
-            k, v = past_key_values[li]  # each [1, kv_heads, seq_len, head_dim]
+            k = past_key_values.key_cache[li]
+            v = past_key_values.value_cache[li]
             seq_len = k.shape[2]
             if seq_len > self.max_seq_len:
                 raise RuntimeError(
